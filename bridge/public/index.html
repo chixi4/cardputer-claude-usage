@@ -277,15 +277,7 @@
     }
     .btn-ghost:hover:not(:disabled) { background: var(--paper-2); color: var(--ink); }
     .btn-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-    .spinner {
-      width: 15px;
-      height: 15px;
-      border-radius: 50%;
-      border: 2px solid currentColor;
-      border-right-color: transparent;
-      animation: spin .85s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
+
 
     .callout {
       background: var(--green-tint);
@@ -763,7 +755,7 @@
       const label = btn.querySelector('.btn-label');
       if (!icon || !label) return;
       if (loading) {
-        icon.innerHTML = '<span class="spinner"></span>';
+        icon.innerHTML = '';
         label.textContent = text;
       } else if (btn.id === 'loginBtn') {
         icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h5v5"/><path d="M21 3l-9 9"/><path d="M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/></svg>';
