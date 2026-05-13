@@ -1,5 +1,13 @@
 # Claude Usage Monitor for Cardputer
 
+[English](#english) | [中文](#中文)
+
+---
+
+<a id="english"></a>
+
+# Claude Usage Monitor for Cardputer
+
 Show Claude Pro/Max usage on an M5Stack Cardputer/Cardputer ADV. The Mac keeps
 all Claude credentials; the Cardputer only receives a compact JSON line over
 Bluetooth.
@@ -118,3 +126,116 @@ pio run -e m5stack-cardputer
 
 The bridge tests cover payload framing, usage normalization, status API, and
 push behavior. The firmware build is the regression gate for the embedded side.
+
+---
+
+<a id="中文"></a>
+
+# Cardputer Claude 用量监控
+
+在 M5Stack Cardputer / Cardputer ADV 上显示 Claude Pro/Max 的 API 用量。Mac 持有所有 Claude 凭证，Cardputer 仅通过蓝牙接收一行紧凑的 JSON 数据。
+
+## 当前架构
+
+```text
+Mac 上的 Claude Code OAuth 凭证
+  → 本地 Node 桥接调用 Anthropic OAuth 用量 API
+  → 桌面仪表盘 http://localhost:8787/
+  → 浏览器 Web Bluetooth 推送到 Cardputer
+```
+
+Claude Token 永远不会进入 ESP32。
+桥接不直接操作蓝牙、USB 或 Wi-Fi 设备；蓝牙权限和连接由浏览器管理。
+
+## Mac 桥接
+
+```bash
+cd /Users/yuookie/Documents/dev/cardputer/claude-usage-monitor/bridge
+npm install
+npm start
+```
+
+打开：
+
+```text
+http://localhost:8787/
+```
+
+检查：
+
+```bash
+curl http://localhost:8787/api/status
+curl http://localhost:8787/api/usage
+curl http://localhost:8787/api/device-payload
+```
+
+局域网保护（可选）：
+
+```bash
+BRIDGE_TOKEN="设置一个随机长字符串" npm start
+```
+
+设置 `BRIDGE_TOKEN` 后，API 请求需要携带 `X-Bridge-Token` 头。
+
+## 数据来源
+
+桥接按以下顺序读取 OAuth 凭证：
+
+1. 环境变量 `CLAUDE_USAGE_ACCESS_TOKEN` 或 `ANTHROPIC_ACCESS_TOKEN`
+2. macOS 钥匙串条目 `Claude Code-credentials`
+3. `~/.claude/.credentials.json` 文件
+
+然后调用 Anthropic 的 OAuth 用量接口（使用 `oauth-2025-04-20` beta 头）。该接口是社区发现的，并非公开稳定合约，因此仪表盘会显示真实错误，而不是静默使用 Demo 数据。
+
+## 蓝牙流程
+
+- **首次使用**：打开仪表盘，确认 Claude 认证，点击"扫描并连接"，在浏览器蓝牙选择器中选择 `Claude-Usage`
+- **后续使用**：打开仪表盘，Chrome/Edge 可复用已授权的蓝牙设备并自动重连
+- **Wi-Fi 和 USB 数据通路不在本版本中**
+- Web Bluetooth 需要 macOS 上的 Chrome 或 Edge，Safari 不支持此 API
+
+## 固件编译与烧录
+
+```bash
+cd /Users/yuookie/Documents/dev/cardputer/claude-usage-monitor/firmware
+pio run -e m5stack-cardputer
+pio run -e m5stack-cardputer -t upload --upload-port /dev/cu.usbmodem12201
+```
+
+如果正常上传卡在 `Running stub...` 后失败，可以用 esptool 的无 stub 方式烧录：
+
+```bash
+/opt/homebrew/Cellar/platformio/6.1.19_1/libexec/bin/python \
+  /Users/yuookie/.platformio/packages/tool-esptoolpy/esptool.py \
+  --chip esp32s3 --port /dev/cu.usbmodem12201 --baud 115200 \
+  --before default_reset --after hard_reset --no-stub write_flash -z \
+  --flash_mode dio --flash_freq 80m --flash_size 8MB \
+  0x0000 .pio/build/m5stack-cardputer/bootloader.bin \
+  0x8000 .pio/build/m5stack-cardputer/partitions.bin \
+  0xe000 /Users/yuookie/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
+  0x10000 .pio/build/m5stack-cardputer/firmware.bin
+```
+
+## 设备界面
+
+Cardputer 屏幕显示：
+
+- 数据到达前的设置/等待画面
+- BLE 广播/连接状态
+- JSON 格式错误和桥接错误信息
+- 长时间未推送时的数据过期警告
+- 实际电池电量（4 格显示，1 格及空电显示红色）
+- 无操作时自动调暗背光，低电量时降低亮度
+- 底部状态行显示重要状态；空闲时每 5-15 秒伪随机轮换橙色单词
+
+## 测试
+
+```bash
+cd /Users/yuookie/Documents/dev/cardputer/claude-usage-monitor/bridge
+npm run verify
+
+cd /Users/yuookie/Documents/dev/cardputer/claude-usage-monitor/firmware
+pio run -e m5stack-cardputer
+```
+
+桥接测试覆盖了载荷组装、用量归一化、状态 API 和推送行为。固件编译是嵌入式端的回归门禁。
