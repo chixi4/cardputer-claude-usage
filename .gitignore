@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# PlatformIO build
+.pio/
+*.bin
+*.elf
+*.map
+*.a
+*.o
+*.d
+
+# Environment / credentials
+firmware/include/secrets.h
+/tmp/claude/
+
+# macOS
+.DS_Store
+screenlog.*
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor
+.vscode/
+.idea/
