@@ -1,8 +1,8 @@
 # Claude Usage Monitor for Cardputer
 
 Show Claude Pro/Max usage on an M5Stack Cardputer/Cardputer ADV. The Mac keeps
-all Claude credentials; the Cardputer only receives a compact JSON line over USB
-serial or BLE.
+all Claude credentials; the Cardputer only receives a compact JSON line over
+Bluetooth.
 
 ## Current Architecture
 
@@ -10,11 +10,12 @@ serial or BLE.
 Claude Code OAuth credentials on Mac
   -> local Node bridge calls Anthropic OAuth usage API
   -> desktop setup dashboard at http://localhost:8787/
-  -> USB serial push to Cardputer
-  -> optional BLE push via isolated worker process
+  -> browser Web Bluetooth push to Cardputer
 ```
 
 Claude tokens never go onto the ESP32.
+The bridge does not open native BLE, USB, or Wi-Fi device transports; the browser
+owns the Bluetooth permission and connection.
 
 ## Mac Bridge
 
@@ -35,7 +36,7 @@ Useful checks:
 ```bash
 curl http://localhost:8787/api/status
 curl http://localhost:8787/api/usage
-curl -X POST "http://localhost:8787/api/push?mode=force&target=usb"
+curl http://localhost:8787/api/device-payload
 ```
 
 Optional LAN protection:
@@ -44,8 +45,7 @@ Optional LAN protection:
 BRIDGE_TOKEN="choose-a-long-random-value" npm start
 ```
 
-If `BRIDGE_TOKEN` is set, the dashboard has a local token box and API calls need
-`X-Bridge-Token`.
+If `BRIDGE_TOKEN` is set, API calls need `X-Bridge-Token`.
 
 ## Data Source
 
@@ -60,13 +60,15 @@ header. This endpoint is community-discovered rather than a public stability
 contract, so the dashboard surfaces real errors instead of silently pretending
 demo data is live.
 
-## Transport Choices
+## Bluetooth Flow
 
-- USB serial is the reliable path. Connect the Cardputer by USB, select the
-  `/dev/tty.usbmodem...` port in the dashboard, then push live data.
-- BLE is optional. The bridge runs BLE scanning in a worker process so a native
-  noble/macOS crash cannot take down the dashboard or USB path.
-- Wi-Fi credentials are no longer needed for the current firmware.
+- First use: open the dashboard, confirm Claude Auth, then click Scan and
+  connect. Choose `Claude-Usage` in the browser Bluetooth picker.
+- Later use: open the dashboard. Chrome/Edge can reuse the previously granted
+  Bluetooth device and reconnect automatically.
+- Wi-Fi and USB data paths are not part of this build.
+- Web Bluetooth requires Chrome or Edge on macOS. Safari does not expose this
+  API.
 
 ## Firmware Build And Flash
 
@@ -97,11 +99,12 @@ The Cardputer shows:
 
 - setup/waiting screen before data arrives
 - BLE advertising/connected state
-- USB data-seen state
 - malformed JSON and bridge error messages
 - stale data warning after no fresh push
 - actual battery level as four blocks; one-block and empty battery are red
 - dimmed backlight after inactivity and lower brightness on low battery
+- bottom status line for important states; when idle, it rotates the orange
+  words every pseudo-random 5 to 15 seconds, matching the web preview seed
 
 ## Tests
 

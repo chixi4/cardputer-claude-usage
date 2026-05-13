@@ -2,28 +2,68 @@ import Fastify from 'fastify';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { spawn } from 'child_process';
 import { localAddresses } from './network.js';
-import { makeDeviceStatusPayload, makePayloadLine } from './payload.js';
+import { makeCompactPayload } from './payload.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
+const BLE_SERVICE_UUID = 'cafe1234-5678-1234-5678-123456789abc';
+const BLE_CHAR_UUID = 'cafe5678-1234-5678-1234-56789abcdef0';
+const BLE_DEVICE_NAME = 'Claude-Usage';
 
 function readPublicFile(fileName) {
   return fs.readFileSync(path.join(PUBLIC_DIR, fileName), 'utf8');
 }
 
-function toBool(value) {
-  return value === true || value === '1' || value === 'true' || value === 'on';
+function findClaudeCli() {
+  const candidates = [
+    process.env.CLAUDE_CLI_PATH,
+    '/opt/homebrew/bin/claude',
+    '/usr/local/bin/claude',
+  ].filter(Boolean);
+
+  const appRoot = path.join(process.env.HOME || '', 'Library', 'Application Support', 'Claude', 'claude-code');
+  try {
+    const versions = fs.readdirSync(appRoot)
+      .filter((name) => /^\d+\.\d+\.\d+/.test(name))
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    for (const version of versions) {
+      candidates.push(path.join(appRoot, version, 'claude.app', 'Contents', 'MacOS', 'claude'));
+    }
+  } catch {
+    // Claude Code is optional; the dashboard will show the manual fallback.
+  }
+
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null;
+}
+
+function startClaudeAuthLogin() {
+  const cli = findClaudeCli();
+  if (!cli) {
+    return {
+      started: false,
+      command: 'claude auth login',
+      error: 'Claude Code CLI was not found',
+    };
+  }
+
+  const child = spawn(cli, ['auth', 'login'], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+  return {
+    started: true,
+    command: `${cli} auth login`,
+    pid: child.pid,
+  };
 }
 
 export function createApp({
   config,
   usageService,
-  bleManager,
-  usbManager,
 }) {
-  let lastPayload = null;
-  let lastPush = null;
   let authDiag = null;
   let authDiagAt = 0;
 
@@ -66,49 +106,24 @@ export function createApp({
     return authDiag;
   }
 
-  async function pushToTransports(data, targets = ['ble', 'usb']) {
-    const payloadLine = makePayloadLine(data);
-    const results = [];
-
-    for (const target of targets) {
-      if (target === 'ble') {
-        if (!bleManager.isConnected()) {
-          results.push({ target, ok: false, skipped: true, reason: 'not connected' });
-          continue;
-        }
-        try {
-          results.push({ target, ...(await bleManager.write(payloadLine)) });
-        } catch (error) {
-          results.push({ target, ok: false, error: error.message });
-        }
-      }
-
-      if (target === 'usb') {
-        if (!usbManager.isConnected()) {
-          results.push({ target, ok: false, skipped: true, reason: 'not connected' });
-          continue;
-        }
-        try {
-          results.push({ target, ...(await usbManager.write(payloadLine)) });
-        } catch (error) {
-          results.push({ target, ok: false, error: error.message });
-        }
-      }
-    }
-
-    lastPayload = JSON.parse(payloadLine);
-    lastPush = {
-      at: new Date().toISOString(),
-      results,
-    };
+  function bluetoothStatus() {
     return {
-      payload: lastPayload,
-      pushed_at: lastPush.at,
-      results,
+      kind: 'web-bluetooth',
+      device_name: BLE_DEVICE_NAME,
+      service_uuid: BLE_SERVICE_UUID,
+      characteristic_uuid: BLE_CHAR_UUID,
+      connection_owner: 'browser',
+      browser_required: 'Chrome or Edge',
     };
   }
 
-  app.decorate('pushToTransports', pushToTransports);
+  function retiredNativeTransport(_req, reply) {
+    return reply.code(410).send({
+      status: 'retired',
+      error: 'browser_bluetooth_only',
+      message: 'Native BLE/USB bridge transports were removed. Use the dashboard Web Bluetooth flow.',
+    });
+  }
 
   app.addHook('onRequest', async (req, reply) => {
     reply.header('Access-Control-Allow-Origin', '*');
@@ -136,28 +151,39 @@ export function createApp({
     auth: credentialDiagnostic(),
     cache: usageService.getCacheStatus(),
     transports: {
-      ble: bleManager.status(),
-      usb: usbManager.status(),
+      bluetooth: bluetoothStatus(),
     },
     network: localAddresses(config.port),
-    last_payload: lastPayload,
-    last_push: lastPush,
     now: new Date().toISOString(),
   }));
 
   app.get('/api/usage', { preHandler: requireBridgeToken }, async (req, reply) => {
     if (req.query?.demo === '1') {
       const demo = usageService.generateDemo();
-      if (req.query?.push === '1') await pushToTransports(demo);
       reply.header('X-Data-Source', 'demo');
       return demo;
     }
 
     const data = await usageService.getLiveUsage(req.query?.force === '1');
-    if (req.query?.push === '1') await pushToTransports(data);
     reply.header('X-Data-Source', data.stale ? 'stale-cache' : 'live');
     if (data.stale) reply.header('X-Data-Stale', 'true');
     return data;
+  });
+
+  app.get('/api/auth/status', { preHandler: requireBridgeToken }, async () => credentialDiagnostic());
+  app.post('/api/auth/login', { preHandler: requireBridgeToken }, async () => startClaudeAuthLogin());
+
+  app.get('/api/device-payload', { preHandler: requireBridgeToken }, async (req, reply) => {
+    const data = req.query?.demo === '1'
+      ? usageService.generateDemo()
+      : await usageService.getLiveUsage(req.query?.force === '1');
+    const payload = makeCompactPayload(data);
+    reply.header('X-Data-Source', data.stale ? 'stale-cache' : data.source);
+    return {
+      payload,
+      usage: data,
+      line: `${JSON.stringify(payload)}\n`,
+    };
   });
 
   app.get('/api/demo', async () => usageService.generateDemo());
@@ -169,58 +195,21 @@ export function createApp({
     return usageService.getRawSnapshot();
   });
 
-  async function pushHandler(req) {
-    const mode = req.query?.mode || req.body?.mode || 'live';
-    const targets = String(req.query?.target || req.body?.target || 'ble,usb')
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean);
-
-    if (mode === 'demo') {
-      return pushToTransports(usageService.generateDemo(), targets);
-    }
-
-    try {
-      return pushToTransports(await usageService.getLiveUsage(mode === 'force'), targets);
-    } catch (error) {
-      const data = usageService.getCachedUsage(true, error.message)
-        ?? makeDeviceStatusPayload('error', error.message);
-      return pushToTransports(data, targets);
-    }
-  }
-
-  app.get('/api/push', { preHandler: requireBridgeToken }, pushHandler);
-  app.post('/api/push', { preHandler: requireBridgeToken }, pushHandler);
-
-  app.post('/api/transports/ble/connect', { preHandler: requireBridgeToken }, async () => bleManager.connect());
-  app.get('/api/transports/ble/connect', { preHandler: requireBridgeToken }, async () => bleManager.connect());
-  app.post('/api/transports/ble/disconnect', { preHandler: requireBridgeToken }, async () => bleManager.disconnect());
-  app.post('/api/transports/ble/autoconnect', { preHandler: requireBridgeToken }, async (req) => {
-    if (toBool(req.query?.enabled ?? req.body?.enabled)) bleManager.startAutoConnect();
-    else bleManager.stopAutoConnect();
-    return bleManager.status();
-  });
-
-  app.get('/api/transports/usb/list', { preHandler: requireBridgeToken }, async () => ({
-    ports: await usbManager.listPorts(),
-    selected: usbManager.status(),
-  }));
-  app.post('/api/transports/usb/connect', { preHandler: requireBridgeToken }, async (req) => (
-    usbManager.connect(req.query?.path || req.body?.path)
-  ));
-  app.get('/api/transports/usb/connect', { preHandler: requireBridgeToken }, async (req) => (
-    usbManager.connect(req.query?.path)
-  ));
-  app.post('/api/transports/usb/disconnect', { preHandler: requireBridgeToken }, async () => usbManager.disconnect());
+  app.get('/api/push', { preHandler: requireBridgeToken }, retiredNativeTransport);
+  app.post('/api/push', { preHandler: requireBridgeToken }, retiredNativeTransport);
+  app.get('/api/transports/ble/connect', { preHandler: requireBridgeToken }, retiredNativeTransport);
+  app.post('/api/transports/ble/connect', { preHandler: requireBridgeToken }, retiredNativeTransport);
+  app.post('/api/transports/ble/disconnect', { preHandler: requireBridgeToken }, retiredNativeTransport);
+  app.post('/api/transports/ble/autoconnect', { preHandler: requireBridgeToken }, retiredNativeTransport);
+  app.get('/api/transports/usb/list', { preHandler: requireBridgeToken }, retiredNativeTransport);
+  app.get('/api/transports/usb/connect', { preHandler: requireBridgeToken }, retiredNativeTransport);
+  app.post('/api/transports/usb/connect', { preHandler: requireBridgeToken }, retiredNativeTransport);
+  app.post('/api/transports/usb/disconnect', { preHandler: requireBridgeToken }, retiredNativeTransport);
 
   app.get('/api/diagnose', { preHandler: requireBridgeToken }, async () => ({
     auth: credentialDiagnostic(),
     cache: usageService.getCacheStatus(),
-    ble: bleManager.status(),
-    usb: {
-      ...usbManager.status(),
-      ports: await usbManager.listPorts(),
-    },
+    bluetooth: bluetoothStatus(),
     network: localAddresses(config.port),
   }));
 
