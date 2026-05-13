@@ -22,8 +22,6 @@
     <string>/tmp/claude/bridge-stderr.log</string>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>BLE_AUTO_CONNECT</key>
-        <string>true</string>
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
     </dict>

@@ -23,6 +23,8 @@ test('compact payload preserves device fields and newline framing', () => {
   assert.equal(payload.wu, 41);
   assert.equal(payload.s, 'live');
   assert.equal(payload.m, 'pro');
+  assert.equal(Number.isInteger(payload.fs), true);
+  assert.equal(payload.fs > 0, true);
 });
 
 test('compact payload trims long error text for the small screen', () => {

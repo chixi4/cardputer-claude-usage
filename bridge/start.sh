@@ -8,7 +8,6 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PORT="${1:-8787}"
 export PORT
-export BLE_AUTO_CONNECT=true
 
 cd "$SCRIPT_DIR"
 
@@ -21,7 +20,6 @@ fi
 echo "[start] Starting Claude Usage Bridge on port $PORT..."
 echo "[start] Dashboard: http://localhost:$PORT/"
 echo "[start] API:       http://localhost:$PORT/api/usage"
-echo "[start] BLE auto-connect: ON"
 echo ""
 
 exec node index.js

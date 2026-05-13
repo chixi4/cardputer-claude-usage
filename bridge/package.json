@@ -12,9 +12,7 @@
     "verify": "npm run check && npm test"
   },
   "dependencies": {
-    "@abandonware/noble": "^1.9.2-26",
     "fastify": "^5.0.0",
-    "pino-pretty": "^13.1.3",
-    "serialport": "^13.0.0"
+    "pino-pretty": "^13.1.3"
   }
 }

@@ -25,12 +25,13 @@ struct UsageData {
 struct UiState {
   bool bleConnected = false;
   bool bleAdvertising = false;
-  bool usbSeen = false;
   int batteryPct = -1;
   bool batteryCharging = false;
   String lastError;
-  String hint = "Open Mac dashboard";
+  String hint = "Open web app";
   unsigned long lastDataAt = 0;
+  String footerText = "Open web app";
+  uint16_t footerColor = 0;
 };
 
 static constexpr uint16_t C_BLACK       = 0x0000;
@@ -99,7 +100,8 @@ static int batteryBlocks(int pct) {
   if (pct <= 5) return 0;
   if (pct <= 25) return 1;
   if (pct <= 50) return 2;
-  return 3;
+  if (pct <= 75) return 3;
+  return 4;
 }
 
 static void drawBattery(int x, int y, int pct, bool charging) {
@@ -114,14 +116,14 @@ static void drawBattery(int x, int y, int pct, bool charging) {
   M5.Display.fillRect(x + w, y + 2, 2, 4, color);
 
   if (blocks < 0) {
-    for (int i = 0; i < 3; i++) {
-      M5.Display.drawRect(x + 2 + i * 5, y + 2, 3, h - 4, C_TEXT_DIM);
+    for (int i = 0; i < 4; i++) {
+      M5.Display.drawRect(x + 2 + i * 4, y + 2, 3, h - 4, C_TEXT_DIM);
     }
     return;
   }
 
-  for (int i = 0; i < 3; i++) {
-    const int bx = x + 2 + i * 5;
+  for (int i = 0; i < 4; i++) {
+    const int bx = x + 2 + i * 4;
     if (i < blocks) {
       M5.Display.fillRect(bx, y + 2, 3, h - 4, color);
     } else if (low) {
@@ -190,7 +192,7 @@ static String clippedStatus(String status) {
   return status;
 }
 
-static const char* const _verbs[] = {
+static const char* const UI_VERBS[] = {
   "Accomplishing","Actioning","Actualizing","Baking","Brewing","Calculating",
   "Cerebrating","Churning","Clauding","Coalescing","Cogitating","Computing",
   "Conjuring","Considering","Cooking","Crafting","Creating","Crunching",
@@ -212,35 +214,11 @@ static const char* const _verbs[] = {
   "Sock-hopping","Spelunking","Tomfoolering","Topsy-turvying","Unfurling",
   "Whatchamacalliting","Wibbling","Zigzagging"
 };
-static const int _verbCount = sizeof(_verbs) / sizeof(_verbs[0]);
+static const int UI_VERB_COUNT = sizeof(UI_VERBS) / sizeof(UI_VERBS[0]);
 
 static void drawBottomStatus(const UsageData& usage, const UiState& ui, bool haveData) {
-  String status;
-  uint16_t color = C_ORANGE_TEXT;
-
-  if (ui.lastError.length() > 0) {
-    status = ui.lastError;
-    color = C_RED;
-  } else if (!haveData) {
-    status = ui.hint;
-    color = ui.bleConnected ? C_GREEN : C_ORANGE_TEXT;
-  } else if (usage.error.length() > 0) {
-    status = usage.error;
-    color = C_RED;
-  } else if (usage.stale) {
-    status = "Stale data";
-    color = C_AMBER;
-  } else if (usage.isDemo) {
-    status = "Demo data";
-  } else if (ui.lastDataAt > 0 && millis() - ui.lastDataAt >= 30000) {
-    // Stable for 30s → show random word
-    static unsigned int _verbIdx = 0;
-    _verbIdx = (_verbIdx + 137) % _verbCount;
-    status = String(_verbs[_verbIdx]) + "...";
-  } else {
-    status = "Live data";
-    color = C_GREEN;
-  }
+  String status = ui.footerText.length() > 0 ? ui.footerText : (haveData ? "Live data" : ui.hint);
+  uint16_t color = ui.footerColor != 0 ? ui.footerColor : C_ORANGE_TEXT;
 
   status = clippedStatus(status);
   const int textW = status.length() * 6;
@@ -255,6 +233,13 @@ static void drawHeader(const UiState& ui) {
   drawBattery(213, 8, ui.batteryPct, ui.batteryCharging);
 }
 
+void drawBatteryOnly(const UiState& ui) {
+  M5.Display.startWrite();
+  M5.Display.fillRect(211, 6, 25, 12, C_BG);
+  drawBattery(213, 8, ui.batteryPct, ui.batteryCharging);
+  M5.Display.endWrite();
+}
+
 void drawWaitingUI(const UiState& ui) {
   M5.Display.setRotation(1);
   M5.Display.startWrite();
@@ -263,8 +248,8 @@ void drawWaitingUI(const UiState& ui) {
 
   textMC("Ready to pair", 120, 42, 2, C_TEXT, C_BG);
   textMC(ui.bleConnected ? "BLE connected" : "BLE advertising", 120, 63, 1, ui.bleConnected ? C_GREEN : C_ORANGE_TEXT, C_BG);
-  textMC(ui.usbSeen ? "USB data seen" : "USB serial ready", 120, 79, 1, ui.usbSeen ? C_GREEN : C_TEXT_DIM, C_BG);
-  textMC("Use Mac dashboard :8787", 120, 95, 1, C_TEXT_DIM, C_BG);
+  textMC("Open web app :8787", 120, 79, 1, C_TEXT_DIM, C_BG);
+  textMC("Connect Bluetooth", 120, 95, 1, C_TEXT_DIM, C_BG);
 
   UsageData empty;
   drawBottomStatus(empty, ui, false);

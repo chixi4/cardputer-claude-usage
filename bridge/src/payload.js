@@ -13,12 +13,21 @@ function compactText(value, max = 64) {
 export function makeCompactPayload(data) {
   const current = data?.current || {};
   const weekly = data?.weekly || {};
+  const updatedAt = finiteNumber(data?.updated_at) ?? Math.floor(Date.now() / 1000);
+  const currentUsed = finiteNumber(current.used_percent);
+  const weeklyUsed = finiteNumber(weekly.used_percent);
+  const seed = (
+    ((updatedAt || 1) * 2654435761)
+    ^ ((currentUsed ?? 0) * 97)
+    ^ ((weeklyUsed ?? 0) * 193)
+  ) >>> 0;
+
   return {
     v: DEVICE_PAYLOAD_VERSION,
-    cu: finiteNumber(current.used_percent),
+    cu: currentUsed,
     cr: finiteNumber(current.remaining_percent),
     ri: compactText(current.resets_in, 18),
-    wu: finiteNumber(weekly.used_percent),
+    wu: weeklyUsed,
     wr: finiteNumber(weekly.remaining_percent),
     wi: compactText(weekly.resets_in, 18),
     m: compactText(data?.model || data?.account?.rate_limit_tier || '', 16),
@@ -28,7 +37,8 @@ export function makeCompactPayload(data) {
     stale: Boolean(data?.stale),
     src: compactText(data?.source || '', 20),
     err: compactText(data?.error || '', 54),
-    ts: finiteNumber(data?.updated_at) ?? Math.floor(Date.now() / 1000),
+    ts: updatedAt,
+    fs: seed || 1,
   };
 }
 

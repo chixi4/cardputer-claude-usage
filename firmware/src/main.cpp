@@ -1,6 +1,6 @@
 /**
  * claude-usage-monitor - Cardputer ADV firmware
- * Data source: USB serial + BLE. The Mac bridge keeps all Claude credentials.
+ * Data source: BLE. The Mac bridge keeps all Claude credentials.
  */
 #include <M5Cardputer.h>
 #include <ArduinoJson.h>
@@ -9,7 +9,7 @@
 
 static constexpr unsigned long STALE_AFTER_MS = 150000;
 static constexpr unsigned long BATTERY_POLL_MS = 15000;
-static constexpr unsigned long FOOTER_POLL_MS = 10000;
+static constexpr unsigned long STATUS_HOLD_MS = 5000;
 static constexpr uint8_t BRIGHT_NORMAL = 92;
 static constexpr uint8_t BRIGHT_DIM = 36;
 static constexpr uint8_t BRIGHT_LOW = 24;
@@ -20,12 +20,14 @@ static UiState ui;
 static UiState prevUi;
 
 static bool haveData = false;
-static String serialBuf = "";
 static unsigned long lastDataAtMs = 0;
 static unsigned long lastBatteryPollMs = 0;
-static unsigned long lastFooterMs = 0;
 static unsigned long lastActivityMs = 0;
 static uint8_t currentBrightness = 255;
+static uint32_t footerRng = 1;
+static String footerWord = "Working...";
+static unsigned long footerHoldUntilMs = 0;
+static unsigned long nextFooterWordAtMs = 0;
 
 static bool usageChanged() {
   return usage.currentUsed != prevUsage.currentUsed
@@ -45,9 +47,6 @@ static bool usageChanged() {
 static bool uiChanged() {
   return ui.bleConnected != prevUi.bleConnected
     || ui.bleAdvertising != prevUi.bleAdvertising
-    || ui.usbSeen != prevUi.usbSeen
-    || ui.batteryPct != prevUi.batteryPct
-    || ui.batteryCharging != prevUi.batteryCharging
     || ui.lastError != prevUi.lastError
     || ui.hint != prevUi.hint;
 }
@@ -60,6 +59,62 @@ static void savePrev() {
 static String jsonString(JsonDocument& doc, const char* key, const char* fallback = "") {
   const char* value = doc[key] | fallback;
   return String(value);
+}
+
+static uint32_t footerRand() {
+  footerRng = 1664525UL * footerRng + 1013904223UL;
+  return footerRng;
+}
+
+static String nextFooterWord() {
+  return String(UI_VERBS[footerRand() % UI_VERB_COUNT]) + "...";
+}
+
+static unsigned long nextFooterDelay() {
+  return 5000UL + (footerRand() % 10001UL);
+}
+
+static void resetFooterSequence(uint32_t seed) {
+  footerRng = seed == 0 ? 1 : seed;
+  footerWord = nextFooterWord();
+  footerHoldUntilMs = millis() + STATUS_HOLD_MS;
+  nextFooterWordAtMs = millis() + nextFooterDelay();
+}
+
+static bool setFooter(const String& text, uint16_t color) {
+  if (ui.footerText == text && ui.footerColor == color) return false;
+  ui.footerText = text;
+  ui.footerColor = color;
+  return true;
+}
+
+static bool updateFooterState() {
+  const unsigned long now = millis();
+
+  if (ui.lastError.length() > 0) {
+    return setFooter(ui.lastError, C_RED);
+  }
+  if (!haveData) {
+    return setFooter(ui.hint, ui.bleConnected ? C_GREEN : C_ORANGE_TEXT);
+  }
+  if (usage.error.length() > 0) {
+    return setFooter(usage.error, C_RED);
+  }
+  if (usage.stale) {
+    return setFooter("Stale data", C_AMBER);
+  }
+  if (usage.isDemo) {
+    return setFooter("Demo data", C_ORANGE_TEXT);
+  }
+  if (now < footerHoldUntilMs) {
+    return setFooter("Live data", C_GREEN);
+  }
+
+  while (now >= nextFooterWordAtMs) {
+    footerWord = nextFooterWord();
+    nextFooterWordAtMs += nextFooterDelay();
+  }
+  return setFooter(footerWord, C_ORANGE_TEXT);
 }
 
 static bool parseData(const String& line, const char* transport) {
@@ -84,6 +139,8 @@ static bool parseData(const String& line, const char* transport) {
   usage.ageSeconds = doc["age"] | -1;
   usage.stale = doc["stale"] | false;
   usage.isDemo = doc["d"] | false;
+  uint32_t footerSeed = doc["fs"] | 0;
+  if (footerSeed == 0) footerSeed = (uint32_t)(doc["ts"] | 1);
 
   const bool hasUsage = usage.currentUsed >= 0 || usage.weeklyUsed >= 0;
   if (!hasUsage && usage.error.length() > 0) {
@@ -98,9 +155,9 @@ static bool parseData(const String& line, const char* transport) {
     haveData = true;
     lastDataAtMs = millis();
     ui.lastDataAt = millis();
+    resetFooterSequence(footerSeed);
   }
 
-  if (String(transport) == "USB") ui.usbSeen = true;
   lastActivityMs = millis();
   Serial.printf("[data] %s current=%d weekly=%d status=%s\n",
     transport,
@@ -132,7 +189,7 @@ static bool updateTransportState() {
   const bool changed = connected != ui.bleConnected || advertising != ui.bleAdvertising;
   ui.bleConnected = connected;
   ui.bleAdvertising = advertising;
-  ui.hint = connected ? "Push live from Mac" : "Open Mac dashboard";
+  ui.hint = connected ? "Syncing soon" : "Open web app";
   return changed;
 }
 
@@ -165,27 +222,10 @@ static void applyBrightness() {
 }
 
 static void redrawFull() {
+  updateFooterState();
   if (haveData) drawUsageUI(usage, ui);
   else drawWaitingUI(ui);
   savePrev();
-}
-
-static void handleSerialByte(char c) {
-  if (c == '\r') return;
-  if (c == '\n') {
-    if (serialBuf.length() > 0) {
-      parseData(serialBuf, "USB");
-      serialBuf = "";
-    }
-    return;
-  }
-
-  if (serialBuf.length() >= 768) {
-    serialBuf = "";
-    ui.lastError = "USB line too long";
-    return;
-  }
-  serialBuf += c;
 }
 
 void setup() {
@@ -205,6 +245,7 @@ void setup() {
   bleUsageInit();
   updateBatteryState(true);
   updateTransportState();
+  updateFooterState();
   lastActivityMs = millis();
 
   redrawFull();
@@ -217,12 +258,7 @@ void loop() {
 
   if (M5Cardputer.Keyboard.isChange()) {
     lastActivityMs = millis();
-    currentBrightness = 255;
     applyBrightness();
-  }
-
-  while (Serial.available()) {
-    handleSerialByte((char)Serial.read());
   }
 
   if (bleUsageAvailable()) {
@@ -233,17 +269,21 @@ void loop() {
     ui.lastError = "BLE line too long";
   }
 
-  needsFullRedraw = updateTransportState()
-    || updateBatteryState(false)
-    || updateStaleState()
+  const bool transportChanged = updateTransportState();
+  const bool batteryChanged = updateBatteryState(false);
+  const bool staleChanged = updateStaleState();
+  const bool footerChanged = updateFooterState();
+
+  needsFullRedraw = transportChanged
+    || staleChanged
     || usageChanged()
     || uiChanged();
 
   if (needsFullRedraw) {
     redrawFull();
-  } else if (millis() - lastFooterMs >= FOOTER_POLL_MS) {
-    lastFooterMs = millis();
-    drawUsageFooter(usage, ui, haveData);
+  } else {
+    if (batteryChanged) drawBatteryOnly(ui);
+    if (footerChanged) drawUsageFooter(usage, ui, haveData);
   }
 
   applyBrightness();
