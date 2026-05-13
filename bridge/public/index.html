@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude Usage Bridge</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f3edde;
+      --panel: #fffaf0;
+      --panel-2: #ece3cf;
+      --ink: #282823;
+      --muted: #756f61;
+      --line: #d7ccb7;
+      --green: #517b3b;
+      --green-2: #d9e8c8;
+      --orange: #d96f3a;
+      --red: #b44a43;
+      --shadow: rgba(74, 64, 45, .12);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--paper);
+      color: var(--ink);
+      font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, select, input {
+      font: inherit;
+    }
+
+    button {
+      height: 34px;
+      border: 1px solid #7e9a66;
+      border-radius: 6px;
+      background: #f8f3e7;
+      color: #24451f;
+      padding: 0 12px;
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: var(--green);
+      border-color: var(--green);
+      color: #fffdf4;
+    }
+
+    button:disabled {
+      opacity: .48;
+      cursor: not-allowed;
+    }
+
+    select, input {
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fffdf7;
+      color: var(--ink);
+      padding: 0 10px;
+      min-width: 0;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr);
+      gap: 0;
+      min-height: 100vh;
+    }
+
+    .side {
+      border-right: 1px solid var(--line);
+      background: #eee5d0;
+      padding: 18px;
+    }
+
+    .main {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    .mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      background: #2b2822;
+      color: #ff8c42;
+      font-weight: 800;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
+    }
+
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: 18px; line-height: 1.1; }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+    h3 { font-size: 15px; }
+    small { color: var(--muted); }
+
+    .stack { display: grid; gap: 10px; }
+    .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .split { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+      box-shadow: 0 1px 0 var(--shadow);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 24px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fffdf7;
+      padding: 2px 9px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #a69a84;
+    }
+    .ok .dot { background: var(--green); }
+    .warn .dot { background: var(--orange); }
+    .bad .dot { background: var(--red); }
+
+    .steps {
+      display: grid;
+      gap: 8px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 26px minmax(0, 1fr);
+      gap: 9px;
+      align-items: start;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 250, 240, .72);
+    }
+
+    .num {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: var(--green-2);
+      color: #24451f;
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    .meter {
+      height: 8px;
+      border-radius: 999px;
+      background: #ded5c2;
+      overflow: hidden;
+      border: 1px solid #cfc2ab;
+    }
+    .meter > i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--orange);
+    }
+    .meter.week > i { background: var(--green); }
+
+    .preview {
+      aspect-ratio: 240 / 135;
+      max-width: 480px;
+      width: 100%;
+      border-radius: 8px;
+      background: #121212;
+      color: white;
+      padding: 18px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      box-shadow: 0 14px 34px rgba(0,0,0,.18);
+    }
+
+    .previewTop {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .screenTitle { font-size: 24px; font-weight: 800; }
+    .screenBattery {
+      width: 39px;
+      height: 15px;
+      border: 2px solid white;
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 2px;
+      padding: 2px 4px 2px 3px;
+    }
+    .screenBattery:after {
+      content: "";
+      position: absolute;
+      right: -6px;
+      top: 4px;
+      width: 4px;
+      height: 5px;
+      background: white;
+    }
+    .screenBattery i { background: white; }
+    .screenBattery.low {
+      border-color: #ff4d4d;
+    }
+    .screenBattery.low:after,
+    .screenBattery.low i {
+      background: #ff4d4d;
+    }
+
+    .screenBody { display: grid; gap: 14px; align-content: center; }
+    .screenSection { display: grid; gap: 7px; }
+    .screenLabel { display: flex; align-items: baseline; justify-content: space-between; }
+    .screenPct { font-size: 30px; font-weight: 800; }
+    .badge { background: #4a3b5c; color: #d8b4e2; border-radius: 7px; padding: 2px 9px; font-size: 12px; }
+    .screenFooter { color: #ff8c42; text-align: center; font-size: 13px; }
+
+    .log {
+      min-height: 120px;
+      max-height: 220px;
+      overflow: auto;
+      background: #242119;
+      color: #efe6d3;
+      border-radius: 8px;
+      padding: 10px;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 860px) {
+      .app { grid-template-columns: 1fr; }
+      .side { border-right: 0; border-bottom: 1px solid var(--line); }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <div class="brand">
+        <div class="mark">C</div>
+        <div>
+          <h1>Claude Usage Bridge</h1>
+          <small>Cardputer setup console</small>
+        </div>
+      </div>
+
+      <div class="stack">
+        <section class="card stack">
+          <div class="split">
+            <h2>Setup</h2>
+            <span id="overallPill" class="pill warn"><i class="dot"></i><span>Checking</span></span>
+          </div>
+          <div class="steps">
+            <div class="step">
+              <div class="num">1</div>
+              <div>
+                <h3>Claude login</h3>
+                <small id="authText">Checking local Claude credentials</small>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">2</div>
+              <div>
+                <h3>Choose transport</h3>
+                <small id="transportText">BLE is easiest; USB is the fallback.</small>
+              </div>
+            </div>
+            <div class="step">
+              <div class="num">3</div>
+              <div>
+                <h3>Push usage</h3>
+                <small id="pushText">Live data has not been sent yet.</small>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card stack">
+          <h2>Actions</h2>
+          <button class="primary" id="refreshBtn">Refresh live</button>
+          <button id="pushLiveBtn">Push live to device</button>
+          <button id="pushDemoBtn">Push demo to device</button>
+          <div class="row">
+            <input id="tokenInput" placeholder="Bridge token, if set">
+            <button id="saveTokenBtn">Save</button>
+          </div>
+        </section>
+
+        <section class="card stack">
+          <h2>Network</h2>
+          <div id="networkList" class="stack mono"></div>
+        </section>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="grid">
+        <section class="card stack">
+          <div class="split">
+            <h2>Bluetooth</h2>
+            <span id="blePill" class="pill warn"><i class="dot"></i><span>Idle</span></span>
+          </div>
+          <small id="bleDetail">Advertising name on Cardputer: Claude-Usage</small>
+          <div class="row">
+            <button class="primary" id="bleConnectBtn">Connect BLE</button>
+            <button id="bleDisconnectBtn">Disconnect</button>
+            <button id="bleAutoBtn">Toggle auto</button>
+          </div>
+          <div class="mono" id="bleMeta"></div>
+        </section>
+
+        <section class="card stack">
+          <div class="split">
+            <h2>USB Serial</h2>
+            <span id="usbPill" class="pill warn"><i class="dot"></i><span>Idle</span></span>
+          </div>
+          <small id="usbDetail">Use USB when BLE is unavailable or for recovery.</small>
+          <div class="row">
+            <select id="usbPorts"></select>
+            <button class="primary" id="usbConnectBtn">Connect USB</button>
+            <button id="usbDisconnectBtn">Disconnect</button>
+          </div>
+          <div class="mono" id="usbMeta"></div>
+        </section>
+      </div>
+
+      <div class="grid">
+        <section class="card stack">
+          <div class="split">
+            <h2>Live Usage</h2>
+            <span id="dataPill" class="pill warn"><i class="dot"></i><span>No data</span></span>
+          </div>
+          <div class="stack">
+            <div class="split">
+              <strong>Current</strong>
+              <span id="currentText" class="mono">--%</span>
+            </div>
+            <div class="meter"><i id="currentBar"></i></div>
+            <small id="currentReset">Resets in --</small>
+          </div>
+          <div class="stack">
+            <div class="split">
+              <strong>Weekly</strong>
+              <span id="weeklyText" class="mono">--%</span>
+            </div>
+            <div class="meter week"><i id="weeklyBar"></i></div>
+            <small id="weeklyReset">Resets in --</small>
+          </div>
+          <div class="mono" id="dataMeta"></div>
+        </section>
+
+        <section class="card stack">
+          <div class="split">
+            <h2>Cardputer Preview</h2>
+            <span class="pill"><i class="dot"></i><span>240x135</span></span>
+          </div>
+          <div class="preview">
+            <div class="previewTop">
+              <span style="color:#ff6b35;font-weight:800;">CLAUDE</span>
+              <span class="screenTitle">Usage</span>
+              <span class="screenBattery" id="screenBattery"><i></i><i></i><i></i><i></i></span>
+            </div>
+            <div class="screenBody">
+              <div class="screenSection">
+                <div class="screenLabel"><span class="screenPct" id="screenCurrent">--%</span><span class="badge">Current</span></div>
+                <div class="meter"><i id="screenCurrentBar"></i></div>
+              </div>
+              <div class="screenSection">
+                <div class="screenLabel"><span class="screenPct" id="screenWeekly">--%</span><span class="badge">Weekly</span></div>
+                <div class="meter week"><i id="screenWeeklyBar"></i></div>
+              </div>
+            </div>
+            <div class="screenFooter" id="screenFooter">Waiting for data</div>
+          </div>
+        </section>
+      </div>
+
+      <section class="card stack">
+        <div class="split">
+          <h2>Event Log</h2>
+          <button id="clearLogBtn">Clear</button>
+        </div>
+        <div id="log" class="log"></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const state = {
+      token: localStorage.getItem('bridgeToken') || '',
+      status: null,
+      usage: null,
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function log(message) {
+      const line = document.createElement('div');
+      line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      $('log').prepend(line);
+    }
+
+    function headers() {
+      return state.token ? { 'X-Bridge-Token': state.token } : {};
+    }
+
+    async function api(path, options = {}) {
+      const res = await fetch(path, {
+        ...options,
+        headers: { ...headers(), ...(options.headers || {}) },
+      });
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+      if (!res.ok) throw new Error(data?.error || `${res.status} ${res.statusText}`);
+      return data;
+    }
+
+    function setPill(id, label, level) {
+      const el = $(id);
+      el.className = `pill ${level || ''}`;
+      el.querySelector('span').textContent = label;
+    }
+
+    function pct(value) {
+      return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : null;
+    }
+
+    function pctText(value) {
+      const p = pct(value);
+      return p == null ? '--%' : `${p}%`;
+    }
+
+    function setBar(id, value) {
+      $(id).style.width = `${pct(value) ?? 0}%`;
+    }
+
+    function renderUsage(data) {
+      state.usage = data;
+      const c = data?.current || {};
+      const w = data?.weekly || {};
+      $('currentText').textContent = pctText(c.used_percent);
+      $('weeklyText').textContent = pctText(w.used_percent);
+      $('currentReset').textContent = `Resets in ${c.resets_in || '--'}`;
+      $('weeklyReset').textContent = `Resets in ${w.resets_in || '--'}`;
+      setBar('currentBar', c.used_percent);
+      setBar('weeklyBar', w.used_percent);
+      $('screenCurrent').textContent = pctText(c.used_percent);
+      $('screenWeekly').textContent = pctText(w.used_percent);
+      setBar('screenCurrentBar', c.used_percent);
+      setBar('screenWeeklyBar', w.used_percent);
+      $('screenFooter').textContent = data?.error ? 'Bridge needs attention' : (data?.demo ? 'Demo data' : 'Live data');
+      $('dataMeta').textContent = data ? `source=${data.source} status=${data.status} age=${data.age_seconds}s` : '';
+      setPill('dataPill', data?.demo ? 'Demo' : data?.stale ? 'Stale' : 'Live', data?.stale ? 'warn' : 'ok');
+    }
+
+    function renderStatus(status) {
+      state.status = status;
+      const authOk = Boolean(status.auth?.ok);
+      const ble = status.transports?.ble || {};
+      const usb = status.transports?.usb || {};
+      const connected = Boolean(ble.connected || usb.connected);
+      const pushed = Boolean(status.last_push);
+
+      setPill('overallPill', authOk && connected ? 'Ready' : authOk ? 'Needs device' : 'Needs auth', authOk && connected ? 'ok' : 'warn');
+      $('authText').textContent = authOk ? `Using ${status.auth.source}` : (status.auth?.error || 'Run claude auth login');
+      $('transportText').textContent = connected ? `Connected by ${ble.connected ? 'BLE' : 'USB'}` : 'Connect BLE or USB to the Cardputer.';
+      $('pushText').textContent = pushed ? `Last push ${new Date(status.last_push.at).toLocaleTimeString()}` : 'Live data has not been sent yet.';
+
+      setPill('blePill', ble.connected ? 'Connected' : ble.state || 'Idle', ble.connected ? 'ok' : ble.last_error ? 'bad' : 'warn');
+      $('bleDetail').textContent = ble.last_error || `Adapter: ${ble.adapter_state || 'unknown'}`;
+      $('bleMeta').textContent = `auto=${ble.enabled} chunk=${ble.chunk_size} written=${ble.bytes_written || 0}B`;
+
+      setPill('usbPill', usb.connected ? 'Connected' : usb.state || 'Idle', usb.connected ? 'ok' : usb.last_error ? 'bad' : 'warn');
+      $('usbDetail').textContent = usb.last_error || (usb.path ? `Port: ${usb.path}` : 'No USB serial connection.');
+      $('usbMeta').textContent = `baud=${usb.baud_rate || 115200} written=${usb.bytes_written || 0}B`;
+
+      $('networkList').innerHTML = '';
+      (status.network || []).forEach((item) => {
+        const div = document.createElement('div');
+        div.textContent = `${item.name}: ${item.url}`;
+        $('networkList').appendChild(div);
+      });
+      if (!status.network?.length) $('networkList').textContent = 'No LAN IPv4 address detected.';
+
+      if (status.last_payload && !state.usage) {
+        renderUsage({
+          source: status.last_payload.src,
+          status: status.last_payload.s,
+          demo: status.last_payload.d,
+          stale: status.last_payload.stale,
+          age_seconds: status.last_payload.age,
+          current: { used_percent: status.last_payload.cu, resets_in: status.last_payload.ri },
+          weekly: { used_percent: status.last_payload.wu, resets_in: status.last_payload.wi },
+        });
+      }
+    }
+
+    async function refreshStatus() {
+      try {
+        renderStatus(await api('/api/status'));
+      } catch (error) {
+        setPill('overallPill', 'Bridge error', 'bad');
+        log(`status failed: ${error.message}`);
+      }
+    }
+
+    async function refreshUsage(force = false) {
+      const data = await api(`/api/usage${force ? '?force=1' : ''}`);
+      renderUsage(data);
+      log(`live usage refreshed (${data.source})`);
+      await refreshStatus();
+    }
+
+    async function refreshPorts() {
+      try {
+        const data = await api('/api/transports/usb/list');
+        const select = $('usbPorts');
+        const current = select.value;
+        select.innerHTML = '';
+        data.ports.forEach((port) => {
+          const option = document.createElement('option');
+          option.value = port.path;
+          option.textContent = `${port.path}${port.score ? ' *' : ''}`;
+          select.appendChild(option);
+        });
+        if (current) select.value = current;
+      } catch (error) {
+        log(`USB list failed: ${error.message}`);
+      }
+    }
+
+    async function action(label, fn) {
+      try {
+        log(`${label}...`);
+        await fn();
+        log(`${label} done`);
+      } catch (error) {
+        log(`${label} failed: ${error.message}`);
+      } finally {
+        await refreshStatus();
+      }
+    }
+
+    $('tokenInput').value = state.token;
+    $('saveTokenBtn').onclick = () => {
+      state.token = $('tokenInput').value.trim();
+      localStorage.setItem('bridgeToken', state.token);
+      log('token saved locally');
+      refreshStatus();
+    };
+    $('refreshBtn').onclick = () => action('refresh live', () => refreshUsage(true));
+    $('pushLiveBtn').onclick = () => action('push live', () => api('/api/push?mode=force', { method: 'POST' }));
+    $('pushDemoBtn').onclick = () => action('push demo', async () => {
+      const result = await api('/api/push?mode=demo', { method: 'POST' });
+      renderUsage({
+        source: result.payload.src,
+        status: result.payload.s,
+        demo: result.payload.d,
+        stale: result.payload.stale,
+        age_seconds: result.payload.age,
+        current: { used_percent: result.payload.cu, resets_in: result.payload.ri },
+        weekly: { used_percent: result.payload.wu, resets_in: result.payload.wi },
+      });
+    });
+    $('bleConnectBtn').onclick = () => action('BLE connect', () => api('/api/transports/ble/connect', { method: 'POST' }));
+    $('bleDisconnectBtn').onclick = () => action('BLE disconnect', () => api('/api/transports/ble/disconnect', { method: 'POST' }));
+    $('bleAutoBtn').onclick = () => {
+      const enabled = !(state.status?.transports?.ble?.enabled);
+      return action(`BLE auto ${enabled ? 'on' : 'off'}`, () => api(`/api/transports/ble/autoconnect?enabled=${enabled ? '1' : '0'}`, { method: 'POST' }));
+    };
+    $('usbConnectBtn').onclick = () => {
+      const path = encodeURIComponent($('usbPorts').value || '');
+      return action('USB connect', () => api(`/api/transports/usb/connect?path=${path}`, { method: 'POST' }));
+    };
+    $('usbDisconnectBtn').onclick = () => action('USB disconnect', () => api('/api/transports/usb/disconnect', { method: 'POST' }));
+    $('clearLogBtn').onclick = () => { $('log').innerHTML = ''; };
+
+    refreshStatus();
+    refreshPorts();
+    setInterval(refreshStatus, 4000);
+    setInterval(refreshPorts, 10000);
+  </script>
+</body>
+</html>
