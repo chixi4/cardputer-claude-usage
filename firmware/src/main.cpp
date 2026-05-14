@@ -9,7 +9,6 @@
 
 static constexpr unsigned long STALE_AFTER_MS = 150000;
 static constexpr unsigned long BATTERY_POLL_MS = 15000;
-static constexpr unsigned long STATUS_HOLD_MS = 5000;
 static constexpr uint8_t BRIGHT_NORMAL = 92;
 static constexpr uint8_t BRIGHT_DIM = 36;
 static constexpr uint8_t BRIGHT_LOW = 24;
@@ -26,8 +25,8 @@ static unsigned long lastActivityMs = 0;
 static uint8_t currentBrightness = 255;
 static uint32_t footerRng = 1;
 static String footerWord = "Working...";
-static unsigned long footerHoldUntilMs = 0;
 static unsigned long nextFooterWordAtMs = 0;
+static bool footerSeeded = false;
 
 static bool usageChanged() {
   return usage.currentUsed != prevUsage.currentUsed
@@ -77,8 +76,8 @@ static unsigned long nextFooterDelay() {
 static void resetFooterSequence(uint32_t seed) {
   footerRng = seed == 0 ? 1 : seed;
   footerWord = nextFooterWord();
-  footerHoldUntilMs = millis() + STATUS_HOLD_MS;
   nextFooterWordAtMs = millis() + nextFooterDelay();
+  footerSeeded = true;
 }
 
 static bool setFooter(const String& text, uint16_t color) {
@@ -105,9 +104,6 @@ static bool updateFooterState() {
   }
   if (usage.isDemo) {
     return setFooter("Demo data", C_ORANGE_TEXT);
-  }
-  if (now < footerHoldUntilMs) {
-    return setFooter("Live data", C_GREEN);
   }
 
   while (now >= nextFooterWordAtMs) {
@@ -155,7 +151,7 @@ static bool parseData(const String& line, const char* transport) {
     haveData = true;
     lastDataAtMs = millis();
     ui.lastDataAt = millis();
-    resetFooterSequence(footerSeed);
+    if (!footerSeeded) resetFooterSequence(footerSeed);
   }
 
   lastActivityMs = millis();
@@ -287,5 +283,5 @@ void loop() {
   }
 
   applyBrightness();
-  delay(haveData ? 80 : 120);
+  delay(haveData ? 120 : 220);
 }

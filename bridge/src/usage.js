@@ -5,6 +5,9 @@ import path from 'path';
 import { execFileSync } from 'child_process';
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
+const CLAUDE_CODE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+const CREDENTIAL_REFRESH_WINDOW_MS = 5 * 60 * 1000;
 const CLAUDE_WEB_BASE = 'https://claude.ai';
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const CLAUDE_SAFE_STORAGE = 'Claude Safe Storage';
@@ -124,7 +127,7 @@ export function normalizeUsage(raw, credentials, fetchedAtMs, stale = false, err
   };
 }
 
-function parseCredentialPayload(raw, source) {
+function parseCredentialPayload(raw, source, storage = { type: 'unknown' }) {
   let json;
   try {
     json = JSON.parse(String(raw).trim());
@@ -133,13 +136,13 @@ function parseCredentialPayload(raw, source) {
   }
 
   const candidates = [
-    json.claudeAiOauth,
-    json.claude_ai_oauth,
-    json.oauth,
-    json,
-  ].filter(Boolean);
+    ['claudeAiOauth', json.claudeAiOauth],
+    ['claude_ai_oauth', json.claude_ai_oauth],
+    ['oauth', json.oauth],
+    [null, json],
+  ].filter(([, value]) => Boolean(value));
 
-  for (const candidate of candidates) {
+  for (const [credentialKey, candidate] of candidates) {
     const accessToken = candidate.accessToken || candidate.access_token || candidate.token;
     if (!accessToken) continue;
 
@@ -150,6 +153,9 @@ function parseCredentialPayload(raw, source) {
       expiresAtMs: parseDateMs(candidate.expiresAt || candidate.expires_at),
       subscriptionType: candidate.subscriptionType || candidate.subscription_type || null,
       rateLimitTier: candidate.rateLimitTier || candidate.rate_limit_tier || null,
+      _rawPayload: json,
+      _credentialKey: credentialKey,
+      _storage: storage,
     };
   }
 
@@ -166,6 +172,9 @@ function readEnvCredentials() {
     expiresAtMs: null,
     subscriptionType: null,
     rateLimitTier: null,
+    _rawPayload: null,
+    _credentialKey: null,
+    _storage: { type: 'environment' },
   };
 }
 
@@ -182,7 +191,10 @@ function readMacKeychainCredentials() {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    return parseCredentialPayload(raw, 'macOS Keychain');
+    return parseCredentialPayload(raw, 'macOS Keychain', {
+      type: 'keychain',
+      account: os.userInfo().username,
+    });
   } catch {
     return null;
   }
@@ -193,7 +205,7 @@ function readCredentialsFile() {
   if (!fs.existsSync(file)) return null;
 
   const raw = fs.readFileSync(file, 'utf8');
-  return parseCredentialPayload(raw, file);
+  return parseCredentialPayload(raw, file, { type: 'file', file });
 }
 
 export function readCredentials() {
@@ -215,6 +227,111 @@ export function readCredentials() {
 
   const detail = errors.length > 0 ? ` (${errors.join('; ')})` : '';
   throw new Error(`Claude OAuth credentials not found${detail}`);
+}
+
+function shouldRefreshCredentials(credentials, nowMs = Date.now()) {
+  return Boolean(
+    credentials?.refreshToken
+      && credentials.expiresAtMs != null
+      && credentials.expiresAtMs <= nowMs + CREDENTIAL_REFRESH_WINDOW_MS,
+  );
+}
+
+function credentialTarget(rawPayload, credentialKey) {
+  if (!rawPayload || typeof rawPayload !== 'object') return null;
+  if (!credentialKey) return rawPayload;
+  if (!rawPayload[credentialKey] || typeof rawPayload[credentialKey] !== 'object') {
+    rawPayload[credentialKey] = {};
+  }
+  return rawPayload[credentialKey];
+}
+
+function setCredentialField(target, names, fallbackName, value) {
+  if (value == null) return;
+  const existing = names.find((name) => Object.prototype.hasOwnProperty.call(target, name));
+  target[existing || fallbackName] = value;
+}
+
+function persistCredentialPayload(credentials, payload) {
+  const text = JSON.stringify(payload);
+  const storage = credentials._storage || {};
+
+  if (storage.type === 'keychain') {
+    execFileSync('/usr/bin/security', [
+      'add-generic-password',
+      '-U',
+      '-s',
+      KEYCHAIN_SERVICE,
+      '-a',
+      storage.account || os.userInfo().username,
+      '-w',
+      text,
+    ], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return;
+  }
+
+  if (storage.type === 'file' && storage.file) {
+    fs.writeFileSync(storage.file, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+    return;
+  }
+
+  throw new Error(`${credentials.source} credentials cannot be refreshed automatically`);
+}
+
+export async function refreshCredentials(credentials, {
+  requestTimeoutMs = 10_000,
+  fetchFn = globalThis.fetch,
+  nowMs = Date.now(),
+} = {}) {
+  if (!credentials?.refreshToken) {
+    throw new Error(`${credentials?.source || 'Claude'} credentials do not include a refresh token`);
+  }
+  if (!credentials._rawPayload) {
+    throw new Error(`${credentials.source} credentials cannot be persisted after refresh`);
+  }
+
+  const response = await fetchJsonWithTimeout(TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      grant_type: 'refresh_token',
+      refresh_token: credentials.refreshToken,
+      client_id: CLAUDE_CODE_CLIENT_ID,
+    }),
+  }, requestTimeoutMs, fetchFn);
+
+  if (!response.access_token) {
+    throw new Error('Claude OAuth refresh response did not include an access token');
+  }
+
+  const nextPayload = structuredClone(credentials._rawPayload);
+  const target = credentialTarget(nextPayload, credentials._credentialKey);
+  if (!target) throw new Error('Claude credentials had no writable OAuth payload');
+
+  setCredentialField(target, ['accessToken', 'access_token', 'token'], 'accessToken', response.access_token);
+  setCredentialField(target, ['refreshToken', 'refresh_token'], 'refreshToken', response.refresh_token);
+  if (response.expires_in != null) {
+    setCredentialField(
+      target,
+      ['expiresAt', 'expires_at'],
+      'expiresAt',
+      nowMs + Number(response.expires_in) * 1000,
+    );
+  }
+  if (response.scope) {
+    target.scopes = Array.isArray(response.scope) ? response.scope : String(response.scope).split(/\s+/).filter(Boolean);
+  }
+  setCredentialField(target, ['subscriptionType', 'subscription_type'], 'subscriptionType', response.subscription_type);
+  setCredentialField(target, ['rateLimitTier', 'rate_limit_tier'], 'rateLimitTier', response.rate_limit_tier);
+
+  persistCredentialPayload(credentials, nextPayload);
+  return parseCredentialPayload(JSON.stringify(nextPayload), credentials.source, credentials._storage);
 }
 
 function chromiumTimeToDateMs(value) {
@@ -419,6 +536,26 @@ export class UsageService {
     this.fetchFn = fetchFn;
     this.now = now;
     this.cache = null;
+    this.refreshPromise = null;
+  }
+
+  async refreshCredentialsIfNeeded(credentials, nowMs = this.now()) {
+    if (!shouldRefreshCredentials(credentials, nowMs)) return credentials;
+    if (!this.refreshPromise) {
+      this.refreshPromise = refreshCredentials(credentials, {
+        requestTimeoutMs: this.requestTimeoutMs,
+        fetchFn: this.fetchFn,
+        nowMs,
+      }).finally(() => {
+        this.refreshPromise = null;
+      });
+    }
+    return this.refreshPromise;
+  }
+
+  async getRequestCredentials() {
+    const credentials = readCredentials();
+    return this.refreshCredentialsIfNeeded(credentials);
   }
 
   async getLiveUsage(force = false) {
@@ -430,7 +567,7 @@ export class UsageService {
     const errors = [];
 
     try {
-      const credentials = readCredentials();
+      const credentials = await this.getRequestCredentials();
       const raw = await fetchJsonWithTimeout(USAGE_URL, {
         headers: {
           Authorization: `Bearer ${credentials.accessToken}`,
@@ -448,7 +585,7 @@ export class UsageService {
       return normalizeUsage(this.cache.raw, credentials, this.cache.fetchedAtMs, false, null, this.now());
     } catch (error) {
       errors.push(`oauth: ${error.message}`);
-      if (this.cache && (error.name === 'AbortError' || error.statusCode === 429 || error.statusCode >= 500)) {
+      if (this.cache) {
         return normalizeUsage(
           this.cache.raw,
           this.cache.credentials,
@@ -506,17 +643,30 @@ export class UsageService {
     };
   }
 
-  diagnoseCredentials() {
+  async diagnoseCredentials({ refresh = true } = {}) {
     try {
-      const credentials = readCredentials();
+      let credentials = readCredentials();
+      const nowMs = this.now();
+      let refreshError = null;
+      if (refresh) {
+        try {
+          credentials = await this.refreshCredentialsIfNeeded(credentials, nowMs);
+        } catch (error) {
+          refreshError = error.message;
+        }
+      }
+      const expired = credentials.expiresAtMs != null && credentials.expiresAtMs <= nowMs + 30_000;
       return {
-        ok: true,
+        ok: !expired && !refreshError,
         source: credentials.source,
         subscription_type: credentials.subscriptionType,
         rate_limit_tier: credentials.rateLimitTier,
         token_expires_at: credentials.expiresAtMs == null
           ? null
           : new Date(credentials.expiresAtMs).toISOString(),
+        expired,
+        needs_login: expired || Boolean(refreshError),
+        error: refreshError || (expired ? 'Claude OAuth credentials expired' : undefined),
       };
     } catch (error) {
       return {

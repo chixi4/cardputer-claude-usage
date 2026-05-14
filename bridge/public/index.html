@@ -358,6 +358,8 @@
 
     .screen-wrap { display: grid; place-items: center; gap: 14px; margin-bottom: 4px; }
     .screen {
+      --screen-orange: #d97757;
+      --screen-green: #8fc26a;
       width: 100%;
       max-width: 440px;
       aspect-ratio: 240 / 135;
@@ -382,9 +384,20 @@
       pointer-events: none;
     }
     .screen-top, .screen-stats, .screen-foot { z-index: 1; }
-    .screen-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-    .screen-brand { color: #ff8843; font-weight: 800; font-size: 11px; letter-spacing: .12em; }
-    .screen-title { font: 700 18px/1 ui-sans-serif, system-ui; letter-spacing: -.01em; }
+    .screen-top {
+      display: grid;
+      grid-template-columns: 34px 1fr 34px;
+      align-items: center;
+      gap: 8px;
+    }
+    .screen-brand {
+      color: var(--screen-orange);
+      font-weight: 800;
+      font-size: 11px;
+      letter-spacing: .12em;
+      justify-self: start;
+    }
+    .screen-title { font: 700 18px/1 ui-sans-serif, system-ui; letter-spacing: -.01em; text-align: center; }
     .screen-battery {
       width: 28px;
       height: 11px;
@@ -395,6 +408,7 @@
       gap: 1px;
       padding: 1.5px;
       position: relative;
+      justify-self: end;
     }
     .screen-battery::after {
       content: "";
@@ -414,7 +428,7 @@
     .screen-battery.low { border-color: #ff4d4d; }
     .screen-battery.low::after,
     .screen-battery.low i { background-color: #ff4d4d; }
-    .screen-battery.low[data-blocks="1"] i:nth-child(n+2),
+    .screen-battery.low[data-blocks="1"] i:nth-child(n+2) { background: transparent; }
     .screen-battery.low[data-blocks="0"] i { background: transparent; box-shadow: inset 0 0 0 1px #ff4d4d; }
     .screen-stats { display: grid; gap: 10px; align-content: center; }
     .screen-stat { display: grid; gap: 5px; }
@@ -433,9 +447,19 @@
     }
     .screen-badge.alt { background: rgba(143,194,106,.22); color: #b3d99b; }
     .screen-bar { height: 4px; background: rgba(255,255,255,.1); border-radius: 2px; overflow: hidden; }
-    .screen-bar > i { display: block; height: 100%; background: #ff8843; border-radius: 2px; transition: width .8s var(--ease-out); }
-    .screen-bar.weekly > i { background: #8fc26a; }
-    .screen-foot { text-align: center; font-size: 9.5px; color: #ff8843; letter-spacing: 0; white-space: nowrap; }
+    .screen-bar > i { display: block; height: 100%; background: var(--screen-orange); border-radius: 2px; transition: width .8s var(--ease-out); }
+    .screen-bar.weekly > i { background: var(--screen-green); }
+    .screen-foot {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      text-align: center;
+      font-size: 9.5px;
+      color: var(--screen-orange);
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
     .screen-caption { font-size: 12.5px; color: var(--muted); text-align: center; }
     .device-row {
       margin-top: 22px;
@@ -643,7 +667,7 @@
                     <div class="screen-bar weekly"><i id="screenWeeklyBar" style="width:0%"></i></div>
                   </div>
                 </div>
-                <div class="screen-foot" id="screenFooter">Open web app</div>
+                <span class="screen-foot" id="screenFooterText">Open web app</span>
               </div>
               <div class="screen-caption" id="screenCaption">准备同步到 Cardputer</div>
             </div>
@@ -675,7 +699,8 @@
     const DEVICE_NAME = 'Claude-Usage';
     const CHUNK_SIZE = 18;
     const SYNC_INTERVAL_MS = 60000;
-    const STATUS_HOLD_MS = 5000;
+    const HIDDEN_SYNC_INTERVAL_MS = 300000;
+    const RECONNECT_DELAYS_MS = [2000, 5000, 15000, 30000, 60000];
     const STORAGE_DEVICE_ID = 'cub-device-id';
     const STORAGE_THEME = 'cub-theme';
 
@@ -712,6 +737,9 @@
       characteristic: null,
       syncTimer: null,
       footerTimer: null,
+      reconnectTimer: null,
+      reconnectAttempts: 0,
+      manualDisconnect: false,
       footer: null,
       lastUsage: null,
       lastPayload: null,
@@ -812,8 +840,6 @@
       const word = () => `${verbs[rand() % verbs.length]}...`;
       const delay = () => 5000 + (rand() % 10001);
       return {
-        text: 'Live data',
-        holdUntil: Date.now() + STATUS_HOLD_MS,
         word: word(),
         nextAt: Date.now() + delay(),
         rand,
@@ -826,26 +852,22 @@
       if (!state.footer) return;
       const now = Date.now();
       if (state.lastUsage?.error || state.lastPayload?.err) {
-        $('screenFooter').textContent = 'Bridge needs attention';
+        $('screenFooterText').textContent = 'Bridge needs attention';
         return;
       }
       if (state.lastUsage?.stale || state.lastPayload?.stale) {
-        $('screenFooter').textContent = 'Stale data';
+        $('screenFooterText').textContent = 'Stale data';
         return;
       }
       if (state.lastUsage?.demo || state.lastPayload?.d) {
-        $('screenFooter').textContent = 'Demo data';
-        return;
-      }
-      if (now < state.footer.holdUntil) {
-        $('screenFooter').textContent = 'Live data';
+        $('screenFooterText').textContent = 'Demo data';
         return;
       }
       while (now >= state.footer.nextAt) {
         state.footer.word = state.footer.wordFn();
         state.footer.nextAt += state.footer.delayFn();
       }
-      $('screenFooter').textContent = state.footer.word;
+      $('screenFooterText').textContent = state.footer.word;
     }
 
     async function checkAuth({ advance = true } = {}) {
@@ -860,9 +882,15 @@
         if (advance && state.active < 1) setActive(1);
         return true;
       }
-      setStepStatus(1, '未登录');
-      $('authTitle').textContent = '需要 Claude OAuth 授权';
-      $('authSub').textContent = '点击登录按钮，完成后这里会自动继续。';
+      if (auth.needs_login || auth.expired) {
+        setStepStatus(1, '登录已过期');
+        $('authTitle').textContent = 'Claude 登录已过期';
+        $('authSub').textContent = '重新授权一次，之后会自动继续到蓝牙连接。';
+      } else {
+        setStepStatus(1, '未登录');
+        $('authTitle').textContent = '需要 Claude OAuth 授权';
+        $('authSub').textContent = '点击登录按钮，完成后这里会自动继续。';
+      }
       $('manualAuth').classList.add('show');
       return false;
     }
@@ -911,6 +939,20 @@
       return message || '蓝牙连接失败。确认 Cardputer 在附近并亮屏后再试一次。';
     }
 
+    function friendlySyncError(errorText) {
+      const text = String(errorText || '');
+      if (/401|Invalid authentication credentials|expired|credentials/i.test(text)) {
+        return 'Claude 登录已过期。点上面的“打开 Claude 登录”，重新授权后会自动恢复。';
+      }
+      if (/403|Just a moment|Cloudflare/i.test(text)) {
+        return 'Claude App cookie 被网页防护挡住了，需要重新走 Claude OAuth 登录。';
+      }
+      if (/abort|timeout/i.test(text)) {
+        return '额度请求超时了。会继续尝试，也会优先显示缓存数据。';
+      }
+      return text || '额度同步失败。';
+    }
+
     async function findKnownDevice() {
       if (!navigator.bluetooth?.getDevices) return null;
       const devices = await navigator.bluetooth.getDevices();
@@ -921,8 +963,10 @@
     }
 
     async function connectDevice(device) {
+      clearReconnectTimer();
       setStepStatus(2, '连接中');
       setError('bleError');
+      state.manualDisconnect = false;
       state.device = device;
       device.addEventListener('gattserverdisconnected', onDisconnected);
       const server = await device.gatt.connect();
@@ -930,12 +974,17 @@
       const characteristic = await service.getCharacteristic(CHAR_UUID);
       state.server = server;
       state.characteristic = characteristic;
+      state.reconnectAttempts = 0;
+      state.footer = null;
       localStorage.setItem(STORAGE_DEVICE_ID, device.id);
       setStepStatus(2, `已连接 · ${device.name || DEVICE_NAME}`);
       $('bleName').textContent = `已连接 · ${device.name || DEVICE_NAME}`;
       if (state.active < 2) setActive(2);
-      await syncNow({ force: true });
       startSyncLoop();
+      await syncNow({ force: true }).catch((error) => {
+        setError('syncError', friendlySyncError(error.message));
+        setStepStatus(3, '同步失败');
+      });
     }
 
     async function requestDevice() {
@@ -951,6 +1000,7 @@
     async function connectWithPicker() {
       const btn = $('bleBtn');
       setLoading(btn, true, '扫描中…');
+      state.manualDisconnect = false;
       try {
         await connectDevice(await requestDevice());
       } catch (error) {
@@ -961,10 +1011,35 @@
       }
     }
 
-    async function reconnectKnown() {
-      setError('bleError');
+    function clearReconnectTimer() {
+      clearTimeout(state.reconnectTimer);
+      state.reconnectTimer = null;
+    }
+
+    function scheduleReconnect() {
+      if (state.reconnectTimer || state.characteristic || state.manualDisconnect || !state.authOk) return;
+      if (!bluetoothSupported()) return;
+      const visible = document.visibilityState === 'visible';
+      const baseDelay = visible
+        ? RECONNECT_DELAYS_MS[Math.min(state.reconnectAttempts, RECONNECT_DELAYS_MS.length - 1)]
+        : HIDDEN_SYNC_INTERVAL_MS;
+      state.reconnectTimer = setTimeout(async () => {
+        state.reconnectTimer = null;
+        const ok = await reconnectKnown({ quiet: true });
+        if (!ok) {
+          state.reconnectAttempts += 1;
+          scheduleReconnect();
+        }
+      }, baseDelay);
+    }
+
+    async function reconnectKnown({ quiet = false } = {}) {
+      if (!quiet) {
+        state.manualDisconnect = false;
+        setError('bleError');
+      }
       if (!bluetoothSupported()) {
-        setError('bleError', '这个浏览器不支持 Web Bluetooth。请用 Chrome 或 Edge。');
+        if (!quiet) setError('bleError', '这个浏览器不支持 Web Bluetooth。请用 Chrome 或 Edge。');
         setStepStatus(2, '浏览器不支持');
         return false;
       }
@@ -977,7 +1052,7 @@
         await connectDevice(known);
         return true;
       } catch (error) {
-        setError('bleError', friendlyBleError(error, { auto: true }));
+        if (!quiet) setError('bleError', friendlyBleError(error, { auto: true }));
         setStepStatus(2, '未连接');
         return false;
       }
@@ -1007,28 +1082,41 @@
       await writePayloadLine(data.line);
       state.lastUsage = data.usage;
       state.lastPayload = data.payload;
-      state.footer = createFooter(data.payload.fs);
+      if (!state.footer) state.footer = createFooter(data.payload.fs);
       renderUsage(data.usage, data.payload);
       updateFooter();
-      setStepStatus(3, '实时同步中');
+      if (data.usage?.error) {
+        setError('syncError', friendlySyncError(data.usage.error));
+        setStepStatus(3, data.usage?.stale ? '显示缓存' : '同步失败');
+      } else {
+        setStepStatus(3, data.usage?.stale ? '显示缓存' : '实时同步中');
+      }
       $('deviceChip').textContent = `${state.device?.name || DEVICE_NAME} · 已连接`;
       return data;
     }
 
     function startSyncLoop() {
-      clearInterval(state.syncTimer);
+      clearTimeout(state.syncTimer);
       clearInterval(state.footerTimer);
-      state.syncTimer = setInterval(() => {
-        syncNow().catch((error) => {
-          setError('syncError', error.message);
-          setStepStatus(3, '同步失败');
-        });
-      }, SYNC_INTERVAL_MS);
+      const scheduleSync = () => {
+        const delay = document.visibilityState === 'visible' ? SYNC_INTERVAL_MS : HIDDEN_SYNC_INTERVAL_MS;
+        state.syncTimer = setTimeout(async () => {
+          try {
+            await syncNow();
+          } catch (error) {
+            setError('syncError', friendlySyncError(error.message));
+            setStepStatus(3, '同步失败');
+          } finally {
+            if (state.characteristic) scheduleSync();
+          }
+        }, delay);
+      };
+      scheduleSync();
       state.footerTimer = setInterval(updateFooter, 1000);
     }
 
     function stopSyncLoop() {
-      clearInterval(state.syncTimer);
+      clearTimeout(state.syncTimer);
       clearInterval(state.footerTimer);
       state.syncTimer = null;
       state.footerTimer = null;
@@ -1038,18 +1126,30 @@
       state.server = null;
       state.characteristic = null;
       stopSyncLoop();
+      $('bleName').textContent = '未连接 · Claude-Usage';
+      $('deviceChip').textContent = '未连接';
+      if (state.manualDisconnect) {
+        setStepStatus(2, '已断开');
+        setStepStatus(3, '等待数据');
+        return;
+      }
       setStepStatus(2, '已断开');
       setStepStatus(3, '等待重连');
-      setError('bleError', '蓝牙已断开，正在尝试自动重连。');
+      setError('bleError');
       setActive(1);
-      setTimeout(() => reconnectKnown(), 1200);
+      state.reconnectAttempts = 0;
+      scheduleReconnect();
     }
 
     async function disconnectDevice() {
+      state.manualDisconnect = true;
+      clearReconnectTimer();
       stopSyncLoop();
       if (state.device?.gatt?.connected) state.device.gatt.disconnect();
       state.server = null;
       state.characteristic = null;
+      $('bleName').textContent = '未连接 · Claude-Usage';
+      $('deviceChip').textContent = '未连接';
       setStepStatus(2, '已断开');
       setStepStatus(3, '等待数据');
       setActive(1);
@@ -1064,13 +1164,15 @@
       state.lastUsage = null;
       state.lastPayload = null;
       state.footer = null;
+      state.manualDisconnect = true;
+      clearReconnectTimer();
       setError('authError');
       setError('bleError');
       setError('syncError');
       setStepStatus(1, state.authOk ? '已登录' : '未登录');
       setStepStatus(2, '等待中');
       setStepStatus(3, '等待数据');
-      $('screenFooter').textContent = 'Open web app';
+      $('screenFooterText').textContent = 'Open web app';
       setActive(state.authOk ? 1 : 0);
     }
 
@@ -1088,6 +1190,10 @@
       $('disconnectBtn').addEventListener('click', disconnectDevice);
       $('resetAll').addEventListener('click', (event) => { event.preventDefault(); resetAll(); });
       $('themeToggle').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+      document.addEventListener('visibilitychange', () => {
+        if (state.characteristic) startSyncLoop();
+        else scheduleReconnect();
+      });
 
       if (!bluetoothSupported()) {
         setError('bleError', 'Web Bluetooth 需要 Chrome 或 Edge。Safari 暂不可用。');
@@ -1097,7 +1203,8 @@
         const ok = await checkAuth({ advance: true });
         if (ok) {
           setStepStatus(2, '尝试自动重连');
-          await reconnectKnown();
+          const connected = await reconnectKnown();
+          if (!connected) scheduleReconnect();
         }
       } catch (error) {
         setError('authError', error.message);
