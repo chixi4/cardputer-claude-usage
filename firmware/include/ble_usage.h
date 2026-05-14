@@ -28,6 +28,8 @@ static void bleStartAdvertising() {
   if (!bleAdvConfigured) {
     adv->addServiceUUID(BLE_SERVICE_UUID);
     adv->setScanResponse(true);
+    adv->setMinInterval(0x140);
+    adv->setMaxInterval(0x280);
     adv->setMinPreferred(0x06);
     adv->setMaxPreferred(0x12);
     bleAdvConfigured = true;
@@ -77,6 +79,7 @@ class BLEUsageCallbacks : public BLECharacteristicCallbacks {
 
 void bleUsageInit() {
   BLEDevice::init(BLE_DEVICE_NAME);
+  BLEDevice::setPower(ESP_PWR_LVL_N6);
   _bleServer = BLEDevice::createServer();
   _bleServer->setCallbacks(new BLEUsageServerCallbacks());
   _bleService = _bleServer->createService(BLE_SERVICE_UUID);

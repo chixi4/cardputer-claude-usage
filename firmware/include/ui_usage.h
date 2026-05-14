@@ -1,7 +1,6 @@
 // ui_usage.h - Cardputer 240x135 Claude usage UI.
 #pragma once
 
-#include <math.h>
 #include <M5Cardputer.h>
 
 struct UsageData {
@@ -95,6 +94,16 @@ static void drawClawd(int x, int y, int scale) {
   }
 }
 
+static void drawClaudeSpark(int x, int y, uint16_t color) {
+  for (int i = 0; i < 8; i++) {
+    float angle = (float)i * 0.78539816f;
+    int x2 = x + (int)(cosf(angle) * 4.0f);
+    int y2 = y + (int)(sinf(angle) * 4.0f);
+    M5.Display.drawLine(x, y, x2, y2, color);
+  }
+  M5.Display.fillCircle(x, y, 1, color);
+}
+
 static int batteryBlocks(int pct) {
   if (pct < 0) return -1;
   if (pct <= 5) return 0;
@@ -105,47 +114,36 @@ static int batteryBlocks(int pct) {
 }
 
 static void drawBattery(int x, int y, int pct, bool charging) {
-  const int w = 18;
+  const int w = 20;
   const int h = 8;
   const int blocks = batteryBlocks(pct);
   const bool low = blocks >= 0 && blocks <= 1 && !charging;
   const uint16_t color = low ? C_RED : C_TEXT;
-  const uint16_t emptyColor = low ? C_RED : C_TEXT_DIM;
 
   M5.Display.drawRect(x, y, w, h, color);
-  M5.Display.fillRect(x + w, y + 2, 2, 4, color);
+  M5.Display.fillRect(x + w + 1, y + 2, 2, 4, color);
 
   if (blocks < 0) {
     for (int i = 0; i < 4; i++) {
-      M5.Display.drawRect(x + 2 + i * 4, y + 2, 3, h - 4, C_TEXT_DIM);
+      M5.Display.drawRect(x + 2 + i * 4, y + 2, 2, h - 4, C_TEXT_DIM);
     }
     return;
   }
 
   for (int i = 0; i < 4; i++) {
-    const int bx = x + 2 + i * 4;
+    const int bx = x + 3 + i * 4;
     if (i < blocks) {
-      M5.Display.fillRect(bx, y + 2, 3, h - 4, color);
-    } else if (low) {
-      M5.Display.drawRect(bx, y + 2, 3, h - 4, emptyColor);
+      M5.Display.fillRect(bx, y + 2, 2, h - 4, color);
+    } else if (blocks == 0) {
+      M5.Display.drawRect(bx, y + 2, 2, h - 4, C_RED);
     }
   }
 
   if (charging) {
-    M5.Display.drawLine(x + 8, y + 1, x + 5, y + 5, C_GREEN);
-    M5.Display.drawLine(x + 8, y + 1, x + 11, y + 1, C_GREEN);
-    M5.Display.drawLine(x + 11, y + 1, x + 8, y + 6, C_GREEN);
+    M5.Display.drawLine(x + 9, y + 1, x + 6, y + 5, C_GREEN);
+    M5.Display.drawLine(x + 9, y + 1, x + 12, y + 1, C_GREEN);
+    M5.Display.drawLine(x + 12, y + 1, x + 9, y + 6, C_GREEN);
   }
-}
-
-static void drawClaudeSpark(int x, int y, uint16_t color = C_ORANGE_TEXT) {
-  for (int i = 0; i < 8; i++) {
-    float angle = (float)i * 0.78539816f;
-    int x2 = x + (int)(cosf(angle) * 4.0f);
-    int y2 = y + (int)(sinf(angle) * 4.0f);
-    M5.Display.drawLine(x, y, x2, y2, color);
-  }
-  M5.Display.fillCircle(x, y, 1, color);
 }
 
 static void drawBadge(int x, int y, const String& label) {
@@ -222,7 +220,7 @@ static void drawBottomStatus(const UsageData& usage, const UiState& ui, bool hav
 
   status = clippedStatus(status);
   const int textW = status.length() * 6;
-  const int startX = (240 - 8 - 4 - textW) / 2;
+  const int startX = (240 - 9 - 4 - textW) / 2;
   drawClaudeSpark(startX + 4, 123, color);
   textTL(status, startX + 12, 120, 1, color, C_BG);
 }
@@ -230,13 +228,13 @@ static void drawBottomStatus(const UsageData& usage, const UiState& ui, bool hav
 static void drawHeader(const UiState& ui) {
   drawClawd(8, 6, 2);
   textMC("Usage", 120, 13, 2, C_TEXT, C_BG);
-  drawBattery(213, 8, ui.batteryPct, ui.batteryCharging);
+  drawBattery(209, 8, ui.batteryPct, ui.batteryCharging);
 }
 
 void drawBatteryOnly(const UiState& ui) {
   M5.Display.startWrite();
-  M5.Display.fillRect(211, 6, 25, 12, C_BG);
-  drawBattery(213, 8, ui.batteryPct, ui.batteryCharging);
+  M5.Display.fillRect(207, 6, 28, 12, C_BG);
+  drawBattery(209, 8, ui.batteryPct, ui.batteryCharging);
   M5.Display.endWrite();
 }
 

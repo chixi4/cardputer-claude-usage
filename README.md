@@ -68,6 +68,12 @@ header. This endpoint is community-discovered rather than a public stability
 contract, so the dashboard surfaces real errors instead of silently pretending
 demo data is live.
 
+Claude Code access tokens expire after hours. When a refresh token is available,
+the bridge refreshes the token and writes the rotated credentials back to the
+same storage before requesting usage data. If refresh fails, the dashboard asks
+for Claude login again and sends a compact error payload to the device instead
+of hanging in a fake connected state.
+
 ## Bluetooth Flow
 
 - First use: open the dashboard, confirm Claude Auth, then click Scan and

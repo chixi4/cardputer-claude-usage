@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { localAddresses } from './network.js';
-import { makeCompactPayload } from './payload.js';
+import { makeCompactPayload, makeDeviceStatusPayload } from './payload.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
@@ -66,6 +66,7 @@ export function createApp({
 }) {
   let authDiag = null;
   let authDiagAt = 0;
+  let authDiagPromise = null;
 
   const app = Fastify({
     logger: {
@@ -98,12 +99,21 @@ export function createApp({
     });
   }
 
-  function credentialDiagnostic() {
+  async function credentialDiagnostic() {
     const now = Date.now();
     if (authDiag && now - authDiagAt < 10_000) return authDiag;
-    authDiag = usageService.diagnoseCredentials();
-    authDiagAt = now;
-    return authDiag;
+    if (!authDiagPromise) {
+      authDiagPromise = Promise.resolve(usageService.diagnoseCredentials({ refresh: true }))
+        .then((result) => {
+          authDiag = result;
+          authDiagAt = Date.now();
+          return result;
+        })
+        .finally(() => {
+          authDiagPromise = null;
+        });
+    }
+    return authDiagPromise;
   }
 
   function bluetoothStatus() {
@@ -148,7 +158,7 @@ export function createApp({
     dashboard: `http://${config.host === '0.0.0.0' ? 'localhost' : config.host}:${config.port}/`,
     cache_ttl_seconds: Math.floor(config.cacheTtlMs / 1000),
     has_bridge_token: Boolean(config.bridgeToken),
-    auth: credentialDiagnostic(),
+    auth: await credentialDiagnostic(),
     cache: usageService.getCacheStatus(),
     transports: {
       bluetooth: bluetoothStatus(),
@@ -174,9 +184,22 @@ export function createApp({
   app.post('/api/auth/login', { preHandler: requireBridgeToken }, async () => startClaudeAuthLogin());
 
   app.get('/api/device-payload', { preHandler: requireBridgeToken }, async (req, reply) => {
-    const data = req.query?.demo === '1'
-      ? usageService.generateDemo()
-      : await usageService.getLiveUsage(req.query?.force === '1');
+    let data;
+    try {
+      if (req.query?.demo === '1') {
+        data = usageService.generateDemo();
+      } else {
+        const auth = await credentialDiagnostic();
+        if (auth.needs_login) {
+          throw new Error('Claude login expired');
+        }
+        data = await usageService.getLiveUsage(req.query?.force === '1');
+      }
+    } catch (error) {
+      data = usageService.getCachedUsage(true, error.message)
+        ?? makeDeviceStatusPayload('error', error.message);
+      reply.header('X-Data-Stale', 'true');
+    }
     const payload = makeCompactPayload(data);
     reply.header('X-Data-Source', data.stale ? 'stale-cache' : data.source);
     return {
@@ -207,7 +230,7 @@ export function createApp({
   app.post('/api/transports/usb/disconnect', { preHandler: requireBridgeToken }, retiredNativeTransport);
 
   app.get('/api/diagnose', { preHandler: requireBridgeToken }, async () => ({
-    auth: credentialDiagnostic(),
+    auth: await credentialDiagnostic(),
     cache: usageService.getCacheStatus(),
     bluetooth: bluetoothStatus(),
     network: localAddresses(config.port),
