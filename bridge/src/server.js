@@ -11,6 +11,9 @@ const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 const BLE_SERVICE_UUID = 'cafe1234-5678-1234-5678-123456789abc';
 const BLE_CHAR_UUID = 'cafe5678-1234-5678-1234-56789abcdef0';
 const BLE_DEVICE_NAME = 'Claude-Usage';
+const SUBSCRIPTION_REQUIRED_MESSAGE = 'Claude Pro/Max required';
+const OAUTH_NOT_ALLOWED_MESSAGE = 'Claude Code OAuth not allowed';
+const DEBUG_LOG_LIMIT = 300;
 
 function readPublicFile(fileName) {
   return fs.readFileSync(path.join(PUBLIC_DIR, fileName), 'utf8');
@@ -60,6 +63,14 @@ function startClaudeAuthLogin() {
   };
 }
 
+function isSubscriptionRequiredError(error) {
+  return /Pro\/Max required|Claude (Max|Pro).*required|subscription.*required|upgrade to (Max|Pro)/i.test(error?.message || String(error || ''));
+}
+
+function isOauthNotAllowedError(error) {
+  return /OAuth.*not allowed|not allowed for this organization|permission_error/i.test(error?.message || String(error || ''));
+}
+
 export function createApp({
   config,
   usageService,
@@ -67,6 +78,8 @@ export function createApp({
   let authDiag = null;
   let authDiagAt = 0;
   let authDiagPromise = null;
+  let debugSeq = 0;
+  const debugLogs = [];
 
   const app = Fastify({
     logger: {
@@ -79,6 +92,18 @@ export function createApp({
           },
     },
   });
+
+  function addDebugLog(event, detail = {}) {
+    const entry = {
+      seq: ++debugSeq,
+      time: new Date().toISOString(),
+      event,
+      detail,
+    };
+    debugLogs.push(entry);
+    if (debugLogs.length > DEBUG_LOG_LIMIT) debugLogs.shift();
+    return entry;
+  }
 
   function requireBridgeToken(req, reply, done) {
     if (!config.bridgeToken) {
@@ -167,6 +192,31 @@ export function createApp({
     now: new Date().toISOString(),
   }));
 
+  app.get('/api/debug/logs', { preHandler: requireBridgeToken }, async (req) => {
+    const limit = Math.max(1, Math.min(Number.parseInt(req.query?.limit ?? '120', 10) || 120, DEBUG_LOG_LIMIT));
+    return {
+      logs: debugLogs.slice(-limit),
+      limit,
+      now: new Date().toISOString(),
+    };
+  });
+
+  app.post('/api/debug/events', { preHandler: requireBridgeToken }, async (req) => {
+    const events = Array.isArray(req.body?.events) ? req.body.events : [req.body];
+    let accepted = 0;
+    for (const item of events) {
+      if (!item || typeof item !== 'object') continue;
+      addDebugLog(`browser:${String(item.event || 'event')}`, {
+        message: item.message,
+        step: item.step,
+        detail: item.detail,
+        browser_time: item.time,
+      });
+      accepted += 1;
+    }
+    return { ok: true, accepted };
+  });
+
   app.get('/api/usage', { preHandler: requireBridgeToken }, async (req, reply) => {
     if (req.query?.demo === '1') {
       const demo = usageService.generateDemo();
@@ -180,8 +230,34 @@ export function createApp({
     return data;
   });
 
-  app.get('/api/auth/status', { preHandler: requireBridgeToken }, async () => credentialDiagnostic());
+  app.get('/api/auth/status', { preHandler: requireBridgeToken }, async (req) => {
+    if (req.query?.probe === '1') {
+      authDiag = null;
+      authDiagAt = 0;
+      const auth = await usageService.diagnoseCredentials({ refresh: true, probe: true });
+      addDebugLog('auth-probe', { ok: auth.ok, source: auth.source, error: auth.error });
+      return auth;
+    }
+    const auth = await credentialDiagnostic();
+    addDebugLog('auth-status', { ok: auth.ok, source: auth.source, error: auth.error });
+    return auth;
+  });
   app.post('/api/auth/login', { preHandler: requireBridgeToken }, async () => startClaudeAuthLogin());
+  app.post('/api/auth/logout', { preHandler: requireBridgeToken }, async (_req, reply) => {
+    try {
+      const result = usageService.logoutCredentials();
+      authDiag = null;
+      authDiagAt = 0;
+      return result;
+    } catch (error) {
+      const statusCode = error.code === 'environment_credentials' ? 409 : 500;
+      return reply.code(statusCode).send({
+        status: 'error',
+        error: 'logout_failed',
+        message: error.message,
+      });
+    }
+  });
 
   app.get('/api/device-payload', { preHandler: requireBridgeToken }, async (req, reply) => {
     let data;
@@ -190,18 +266,38 @@ export function createApp({
         data = usageService.generateDemo();
       } else {
         const auth = await credentialDiagnostic();
+        if (auth.needs_subscription) {
+          throw new Error(SUBSCRIPTION_REQUIRED_MESSAGE);
+        }
+        if (auth.oauth_not_allowed) {
+          throw new Error(OAUTH_NOT_ALLOWED_MESSAGE);
+        }
         if (auth.needs_login) {
           throw new Error('Claude login expired');
         }
         data = await usageService.getLiveUsage(req.query?.force === '1');
       }
     } catch (error) {
-      data = usageService.getCachedUsage(true, error.message)
+      addDebugLog('device-payload-error', { message: error.message });
+      data = isSubscriptionRequiredError(error)
+        ? makeDeviceStatusPayload('subscription_required', SUBSCRIPTION_REQUIRED_MESSAGE)
+        : isOauthNotAllowedError(error)
+        ? makeDeviceStatusPayload('auth_required', OAUTH_NOT_ALLOWED_MESSAGE)
+        : usageService.getCachedUsage(true, error.message)
         ?? makeDeviceStatusPayload('error', error.message);
       reply.header('X-Data-Stale', 'true');
     }
     const payload = makeCompactPayload(data);
     reply.header('X-Data-Source', data.stale ? 'stale-cache' : data.source);
+    addDebugLog('device-payload', {
+      force: req.query?.force === '1',
+      status: data.status,
+      source: data.stale ? 'stale-cache' : data.source,
+      stale: Boolean(data.stale),
+      current: payload.cu,
+      weekly: payload.wu,
+      error: payload.err,
+    });
     return {
       payload,
       usage: data,

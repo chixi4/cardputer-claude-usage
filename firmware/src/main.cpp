@@ -27,6 +27,15 @@ static uint32_t footerRng = 1;
 static String footerWord = "Working...";
 static unsigned long nextFooterWordAtMs = 0;
 static bool footerSeeded = false;
+static uint32_t appEventSeq = 0;
+static unsigned long nextHeartbeatAtMs = 0;
+static String serialCommandBuf = "";
+
+static void appLog(const char* event, const String& detail = "") {
+  Serial.printf("[app %lu +%lu] %s", ++appEventSeq, millis(), event);
+  if (detail.length() > 0) Serial.printf(" %s", detail.c_str());
+  Serial.println();
+}
 
 static bool usageChanged() {
   return usage.currentUsed != prevUsage.currentUsed
@@ -87,6 +96,17 @@ static bool setFooter(const String& text, uint16_t color) {
   return true;
 }
 
+static void clearUsageState(const String& hint = "Open web app") {
+  usage = UsageData();
+  haveData = false;
+  ui.lastError = "";
+  ui.hint = hint;
+  ui.lastDataAt = 0;
+  lastDataAtMs = 0;
+  footerSeeded = false;
+  lastActivityMs = millis();
+}
+
 static bool updateFooterState() {
   const unsigned long now = millis();
 
@@ -122,6 +142,13 @@ static bool parseData(const String& line, const char* transport) {
     return false;
   }
 
+  String command = jsonString(doc, "cmd");
+  if (command == "wait" || command == "clear") {
+    clearUsageState(jsonString(doc, "hint", "Open web app"));
+    appLog("data-command", String("transport=") + transport + " cmd=" + command);
+    return true;
+  }
+
   usage.currentUsed = doc["cu"] | -1;
   usage.currentRemaining = doc["cr"] | -1;
   usage.currentResetsIn = jsonString(doc, "ri");
@@ -155,12 +182,10 @@ static bool parseData(const String& line, const char* transport) {
   }
 
   lastActivityMs = millis();
-  Serial.printf("[data] %s current=%d weekly=%d status=%s\n",
-    transport,
-    usage.currentUsed,
-    usage.weeklyUsed,
-    usage.status.c_str()
-  );
+  appLog("data-frame", String("transport=") + transport
+    + " current=" + String(usage.currentUsed)
+    + " weekly=" + String(usage.weeklyUsed)
+    + " status=" + usage.status);
   return true;
 }
 
@@ -186,6 +211,7 @@ static bool updateTransportState() {
   ui.bleConnected = connected;
   ui.bleAdvertising = advertising;
   ui.hint = connected ? "Syncing soon" : "Open web app";
+  if (changed) appLog("transport", bleUsageDebugStatus());
   return changed;
 }
 
@@ -204,7 +230,7 @@ static void applyBrightness() {
   if (ui.batteryPct >= 0 && ui.batteryPct <= 25 && !ui.batteryCharging) {
     target = 64;
   }
-  if (now - lastActivityMs > 120000) {
+  if (!ui.batteryCharging && now - lastActivityMs > 120000) {
     target = BRIGHT_DIM;
   }
   if (ui.batteryPct >= 0 && ui.batteryPct <= 5 && !ui.batteryCharging) {
@@ -222,6 +248,79 @@ static void redrawFull() {
   if (haveData) drawUsageUI(usage, ui);
   else drawWaitingUI(ui);
   savePrev();
+}
+
+static String statusLine() {
+  return String("have_data=") + (haveData ? "1" : "0")
+    + " stale=" + (usage.stale ? "1" : "0")
+    + " current=" + String(usage.currentUsed)
+    + " weekly=" + String(usage.weeklyUsed)
+    + " battery=" + String(ui.batteryPct)
+    + " charging=" + (ui.batteryCharging ? "1" : "0")
+    + " " + bleUsageDebugStatus();
+}
+
+static void printHelp() {
+  Serial.println("[cmd] help: status | ble-reset | reboot | clear | help");
+}
+
+static void handleSerialCommand(String command) {
+  command.trim();
+  command.toLowerCase();
+  if (command.length() == 0) return;
+
+  appLog("serial-command", command);
+  if (command == "status") {
+    Serial.printf("[status +%lu] %s\n", millis(), statusLine().c_str());
+    return;
+  }
+  if (command == "ble-reset" || command == "blereset") {
+    clearUsageState("BLE reset");
+    bleUsageReset();
+    updateTransportState();
+    redrawFull();
+    Serial.printf("[status +%lu] %s\n", millis(), statusLine().c_str());
+    return;
+  }
+  if (command == "clear") {
+    clearUsageState();
+    redrawFull();
+    Serial.printf("[status +%lu] %s\n", millis(), statusLine().c_str());
+    return;
+  }
+  if (command == "reboot" || command == "restart") {
+    Serial.println("[cmd] rebooting");
+    Serial.flush();
+    delay(80);
+    ESP.restart();
+    return;
+  }
+  printHelp();
+}
+
+static void pollSerialCommands() {
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c == '\r') continue;
+    if (c == '\n') {
+      handleSerialCommand(serialCommandBuf);
+      serialCommandBuf = "";
+      continue;
+    }
+    if (serialCommandBuf.length() < 80) {
+      serialCommandBuf += c;
+    } else {
+      serialCommandBuf = "";
+      appLog("serial-overflow");
+    }
+  }
+}
+
+static void heartbeatIfDue() {
+  const unsigned long now = millis();
+  if (now < nextHeartbeatAtMs) return;
+  nextHeartbeatAtMs = now + 10000UL;
+  appLog("heartbeat", statusLine());
 }
 
 void setup() {
@@ -245,11 +344,13 @@ void setup() {
   lastActivityMs = millis();
 
   redrawFull();
-  Serial.println("[boot] claude-usage-monitor ready");
+  appLog("boot", "claude-usage-monitor ready");
+  printHelp();
 }
 
 void loop() {
   M5Cardputer.update();
+  pollSerialCommands();
   bool needsFullRedraw = false;
 
   if (M5Cardputer.Keyboard.isChange()) {
@@ -270,6 +371,12 @@ void loop() {
   const bool staleChanged = updateStaleState();
   const bool footerChanged = updateFooterState();
 
+  if (batteryChanged) {
+    appLog("battery", String("pct=") + String(ui.batteryPct)
+      + " charging=" + (ui.batteryCharging ? "1" : "0"));
+  }
+  if (staleChanged) appLog("stale", usage.stale ? "1" : "0");
+
   needsFullRedraw = transportChanged
     || staleChanged
     || usageChanged()
@@ -283,5 +390,7 @@ void loop() {
   }
 
   applyBrightness();
-  delay(haveData ? 120 : 220);
+  heartbeatIfDue();
+  const int loopDelayMs = ui.bleConnected ? 60 : (haveData ? 140 : 220);
+  delay(loopDelayMs);
 }

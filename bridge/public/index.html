@@ -229,6 +229,19 @@
     .step-title { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; flex: 1; }
     .step-status { font-size: 12.5px; color: var(--muted); font-weight: 550; text-align: right; }
     .step[data-state="done"] .step-status { color: var(--green-deep); }
+    .mini-action {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 12.5px;
+      font-weight: 650;
+      padding: 4px 0;
+      cursor: pointer;
+    }
+    .mini-action:hover:not(:disabled) { color: var(--ink); }
+    .mini-action:disabled { opacity: .5; cursor: default; }
     .step-body-wrap {
       display: grid;
       grid-template-rows: 1fr;
@@ -509,6 +522,56 @@
     .foot a:hover { color: var(--ink); }
     .error-line { color: var(--bad); font-size: 13px; margin-top: 10px; display: none; }
     .error-line.show { display: block; }
+    .confirm-dialog {
+      width: min(420px, calc(100vw - 40px));
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      padding: 0;
+      background: var(--surface);
+      color: var(--ink);
+      box-shadow: 0 24px 80px rgba(0,0,0,.16);
+    }
+    .confirm-dialog::backdrop { background: rgba(24,26,22,.28); }
+    .confirm-inner { padding: 20px; }
+    .confirm-title { margin: 0; font-size: 17px; font-weight: 700; }
+    .confirm-copy { margin: 10px 0 18px; color: var(--muted); font-size: 13.5px; line-height: 1.55; }
+    .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .debug-panel {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--surface) 72%, transparent);
+      overflow: hidden;
+    }
+    .debug-panel summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 12.5px;
+      font-weight: 650;
+    }
+    .debug-panel summary::-webkit-details-marker { display: none; }
+    .debug-panel summary span:last-child { color: var(--muted-2); font-weight: 500; }
+    .debug-body {
+      border-top: 1px solid var(--line);
+      padding: 10px 12px 12px;
+      display: grid;
+      gap: 8px;
+    }
+    .debug-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .debug-log {
+      margin: 0;
+      max-height: 190px;
+      overflow: auto;
+      white-space: pre-wrap;
+      color: var(--muted);
+      font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
 
     @media (max-width: 520px) {
       .step { padding: 18px; }
@@ -566,6 +629,7 @@
           </div>
           <h2 class="step-title">登录 Claude</h2>
           <span class="step-status" id="step1Status">检查中</span>
+          <button class="mini-action" id="logoutBtn" hidden>退出</button>
         </div>
         <div class="step-body-wrap">
           <div class="step-body-inner">
@@ -626,7 +690,6 @@
                 </span>
                 <span class="btn-label">扫描并连接</span>
               </button>
-              <button class="btn btn-ghost" id="retryKnownBtn">尝试自动重连</button>
             </div>
             <div class="error-line" id="bleError"></div>
           </div>
@@ -691,7 +754,32 @@
       <span>本地运行 · 额度数据只在这台电脑和 Cardputer 之间传输</span>
       <a id="resetAll">重置流程</a>
     </footer>
+
+    <details class="debug-panel" id="debugPanel">
+      <summary>
+        <span>诊断日志</span>
+        <span id="debugCount">0 条</span>
+      </summary>
+      <div class="debug-body">
+        <div class="debug-actions">
+          <button class="btn btn-ghost" id="refreshDebugBtn">读取 bridge 日志</button>
+          <button class="btn btn-ghost" id="clearDebugBtn">清空本页</button>
+        </div>
+        <pre class="debug-log" id="debugLog">等待事件…</pre>
+      </div>
+    </details>
   </div>
+
+  <dialog class="confirm-dialog" id="logoutDialog">
+    <div class="confirm-inner">
+      <h3 class="confirm-title">退出 Claude 登录？</h3>
+      <p class="confirm-copy">这会移除这台电脑上的 Claude Code OAuth 凭据，并断开当前 Cardputer 同步。之后需要重新登录才能继续使用。</p>
+      <div class="confirm-actions">
+        <button class="btn btn-ghost" id="cancelLogoutBtn">取消</button>
+        <button class="btn btn-primary" id="confirmLogoutBtn">退出登录</button>
+      </div>
+    </div>
+  </dialog>
 
   <script>
     const SERVICE_UUID = 'cafe1234-5678-1234-5678-123456789abc';
@@ -700,7 +788,20 @@
     const CHUNK_SIZE = 18;
     const SYNC_INTERVAL_MS = 60000;
     const HIDDEN_SYNC_INTERVAL_MS = 300000;
-    const RECONNECT_DELAYS_MS = [2000, 5000, 15000, 30000, 60000];
+    const USAGE_UNAVAILABLE_RETRY_MS = 10000;
+    const RECONNECT_DELAYS_MS = [600, 1200, 2500, 5000, 8000, 10000];
+    const HIDDEN_RECONNECT_INTERVAL_MS = 30000;
+    const LINK_WATCH_VISIBLE_MS = 2500;
+    const LINK_WATCH_HIDDEN_MS = 15000;
+    const LINK_PROBE_VISIBLE_MS = 3500;
+    const LINK_PROBE_HIDDEN_MS = 20000;
+    const BLE_CONNECT_TIMEOUT_MS = 7000;
+    const BLE_DISCOVERY_TIMEOUT_MS = 4000;
+    const BLE_WRITE_TIMEOUT_MS = 2500;
+    const DEBUG_LOG_LIMIT = 180;
+    const DEBUG_FLUSH_MS = 1200;
+    const PREVIEW_BATTERY_PERCENT = 82;
+    const WAIT_PAYLOAD_LINE = `${JSON.stringify({ v: 1, cmd: 'wait', s: 'waiting', hint: 'Open web app' })}\n`;
     const STORAGE_DEVICE_ID = 'cub-device-id';
     const STORAGE_THEME = 'cub-theme';
 
@@ -728,6 +829,7 @@
     ];
 
     const $ = (id) => document.getElementById(id);
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const steps = [$('step1'), $('step2'), $('step3')];
     const state = {
       active: 0,
@@ -736,13 +838,27 @@
       server: null,
       characteristic: null,
       syncTimer: null,
+      fastSyncTimer: null,
+      usageRecoverTimer: null,
       footerTimer: null,
       reconnectTimer: null,
+      linkWatchTimer: null,
+      linkProbeTimer: null,
+      connectPromise: null,
+      watchedDevice: null,
+      advertisementReconnectTimer: null,
       reconnectAttempts: 0,
+      needsBleGrant: false,
       manualDisconnect: false,
       footer: null,
       lastUsage: null,
       lastPayload: null,
+      lastLine: null,
+      writeChain: Promise.resolve(),
+      debugLogs: [],
+      debugSeq: 0,
+      pendingDebugEvents: [],
+      debugFlushTimer: null,
     };
 
     function setTheme(theme) {
@@ -769,12 +885,14 @@
 
     function setStepStatus(step, text) {
       $(`step${step}Status`).textContent = text;
+      debugLog('step-status', `${step}:${text}`, { step, text });
     }
 
     function setError(id, text = '') {
       const el = $(id);
       el.textContent = text;
       el.classList.toggle('show', Boolean(text));
+      if (text) debugLog('ui-error', id, { text });
     }
 
     function setLoading(btn, loading, text) {
@@ -794,6 +912,18 @@
       }
     }
 
+    function setBleGrantRequired() {
+      state.needsBleGrant = true;
+      clearReconnectTimer();
+      $('bleName').textContent = '未授权 · Claude-Usage';
+      setStepStatus(2, '等待授权');
+    }
+
+    function setAuthControls(loggedIn, canLogout = loggedIn) {
+      $('logoutBtn').hidden = !canLogout;
+      $('loginBtn').hidden = loggedIn;
+    }
+
     async function api(path, options = {}) {
       const response = await fetch(path, options);
       const text = await response.text();
@@ -801,6 +931,98 @@
       try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
       if (!response.ok) throw new Error(data?.message || data?.error || `${response.status} ${response.statusText}`);
       return data;
+    }
+
+    function nowClock() {
+      return new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function compactError(error) {
+      return {
+        name: error?.name || undefined,
+        message: error?.message || String(error || ''),
+      };
+    }
+
+    function compactDevice(device) {
+      return {
+        name: device?.name || DEVICE_NAME,
+        id: device?.id ? `...${device.id.slice(-6)}` : undefined,
+        gattConnected: Boolean(device?.gatt?.connected),
+      };
+    }
+
+    function renderDebugLog() {
+      $('debugCount').textContent = `${state.debugLogs.length} 条`;
+      $('debugLog').textContent = state.debugLogs.length
+        ? state.debugLogs.map((entry) => {
+            const detail = entry.detail && Object.keys(entry.detail).length
+              ? ` ${JSON.stringify(entry.detail)}`
+              : '';
+            return `${entry.clock} #${entry.seq} ${entry.event}${entry.message ? ` ${entry.message}` : ''}${detail}`;
+          }).join('\n')
+        : '等待事件…';
+      $('debugLog').scrollTop = $('debugLog').scrollHeight;
+    }
+
+    function queueDebugUpload(entry) {
+      state.pendingDebugEvents.push({
+        time: entry.time,
+        event: entry.event,
+        message: entry.message,
+        step: state.active + 1,
+        detail: entry.detail,
+      });
+      if (state.debugFlushTimer) return;
+      state.debugFlushTimer = setTimeout(flushDebugEvents, DEBUG_FLUSH_MS);
+    }
+
+    async function flushDebugEvents() {
+      clearTimeout(state.debugFlushTimer);
+      state.debugFlushTimer = null;
+      const events = state.pendingDebugEvents.splice(0, state.pendingDebugEvents.length);
+      if (!events.length) return;
+      try {
+        await fetch('/api/debug/events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ events }),
+        });
+      } catch {
+        state.pendingDebugEvents.unshift(...events.slice(-40));
+      }
+    }
+
+    function debugLog(event, message = '', detail = {}) {
+      const entry = {
+        seq: ++state.debugSeq,
+        time: new Date().toISOString(),
+        clock: nowClock(),
+        event,
+        message,
+        detail,
+      };
+      state.debugLogs.push(entry);
+      if (state.debugLogs.length > DEBUG_LOG_LIMIT) state.debugLogs.shift();
+      renderDebugLog();
+      queueDebugUpload(entry);
+    }
+
+    async function loadBridgeDebugLogs() {
+      try {
+        const data = await api('/api/debug/logs?limit=120');
+        state.debugLogs = data.logs.map((entry) => ({
+          seq: `b${entry.seq}`,
+          time: entry.time,
+          clock: new Date(entry.time).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          event: entry.event,
+          message: '',
+          detail: entry.detail || {},
+        }));
+        renderDebugLog();
+      } catch (error) {
+        debugLog('debug-load-failed', error.message);
+      }
     }
 
     function pct(value) {
@@ -817,6 +1039,11 @@
       return 4;
     }
 
+    function hasQuotaData(usage, payload) {
+      return pct(usage?.current?.used_percent ?? payload?.cu) != null
+        || pct(usage?.weekly?.used_percent ?? payload?.wu) != null;
+    }
+
     function renderUsage(usage, payload) {
       const current = pct(usage?.current?.used_percent ?? payload?.cu);
       const weekly = pct(usage?.weekly?.used_percent ?? payload?.wu);
@@ -824,9 +1051,14 @@
       $('screenWeekly').textContent = weekly == null ? '--' : String(weekly);
       $('screenCurrentBar').style.width = `${current ?? 0}%`;
       $('screenWeeklyBar').style.width = `${weekly ?? 0}%`;
-      $('screenCaption').textContent = usage?.stale ? '显示的是缓存数据' : '正在显示在 Cardputer 屏幕上';
+      if (!hasQuotaData(usage, payload) && usage?.error) {
+        $('screenCaption').textContent = '没有可用额度数据';
+      } else {
+        $('screenCaption').textContent = usage?.stale ? '显示的是缓存数据' : '正在显示在 Cardputer 屏幕上';
+      }
 
-      const blocks = batteryBlocks(82);
+      const batteryPct = pct(payload?.bp ?? usage?.device?.battery_percent ?? PREVIEW_BATTERY_PERCENT);
+      const blocks = batteryBlocks(batteryPct);
       $('screenBattery').dataset.blocks = String(blocks);
       $('screenBattery').classList.toggle('low', blocks <= 1);
     }
@@ -852,7 +1084,7 @@
       if (!state.footer) return;
       const now = Date.now();
       if (state.lastUsage?.error || state.lastPayload?.err) {
-        $('screenFooterText').textContent = 'Bridge needs attention';
+        $('screenFooterText').textContent = state.lastPayload?.err || 'Bridge needs attention';
         return;
       }
       if (state.lastUsage?.stale || state.lastPayload?.stale) {
@@ -870,17 +1102,46 @@
       $('screenFooterText').textContent = state.footer.word;
     }
 
-    async function checkAuth({ advance = true } = {}) {
+    async function checkAuth({ advance = true, probe = false, warm = false, reconnect = true } = {}) {
       setError('authError');
-      const auth = await api('/api/auth/status');
+      debugLog('auth-check-start', probe ? 'probe' : 'cached', { advance, warm, reconnect });
+      const auth = await api(`/api/auth/status${probe ? '?probe=1' : ''}`);
       state.authOk = Boolean(auth.ok);
+      debugLog('auth-check-result', auth.ok ? 'ok' : 'not-ok', {
+        source: auth.source,
+        needsLogin: auth.needs_login,
+        needsSubscription: auth.needs_subscription,
+        oauthNotAllowed: auth.oauth_not_allowed,
+        error: auth.error,
+      });
       if (state.authOk) {
+        setAuthControls(true);
         setStepStatus(1, `已登录 · ${auth.source}`);
         $('authTitle').textContent = 'Claude 已授权';
         $('authSub').textContent = '接下来连接 Cardputer 蓝牙即可同步。';
         $('manualAuth').classList.remove('show');
         if (advance && state.active < 1) setActive(1);
+        if (reconnect && !state.characteristic && !state.manualDisconnect && !state.needsBleGrant) scheduleReconnect();
+        if (warm) warmUsageSource({ force: true, quiet: true }).catch(() => scheduleUsageRecovery());
         return true;
+      }
+      setAuthControls(false, Boolean(auth.source));
+      clearReconnectTimer();
+      if (auth.oauth_not_allowed) {
+        setStepStatus(1, 'Claude Code 不可用');
+        $('authTitle').textContent = 'Claude Code 授权不可用';
+        $('authSub').textContent = '当前组织不允许 OAuth 连接 Claude Code。重新登录、切换账号或检查订阅后点“重新检查”。';
+        $('manualAuth').classList.add('show');
+        setError('authError', 'Claude Code OAuth not allowed');
+        return false;
+      }
+      if (auth.needs_subscription) {
+        setStepStatus(1, '需要 Pro/Max');
+        $('authTitle').textContent = 'Claude 会员不可用';
+        $('authSub').textContent = '当前账号已登录，但 Claude Code 需要 Pro/Max。升级或换账号后点“重新检查”。';
+        $('manualAuth').classList.add('show');
+        setError('authError', 'Claude Pro/Max required');
+        return false;
       }
       if (auth.needs_login || auth.expired) {
         setStepStatus(1, '登录已过期');
@@ -895,15 +1156,67 @@
       return false;
     }
 
+    function requestLogoutAuth() {
+      if (typeof $('logoutDialog').showModal === 'function') {
+        $('logoutDialog').showModal();
+      } else if (window.confirm('退出 Claude 登录？这会移除这台电脑上的 Claude Code OAuth 凭据。')) {
+        performLogoutAuth();
+      }
+    }
+
+    function closeLogoutDialog() {
+      if ($('logoutDialog').open) $('logoutDialog').close();
+    }
+
+    async function performLogoutAuth() {
+      const btn = $('logoutBtn');
+      const confirmBtn = $('confirmLogoutBtn');
+      btn.disabled = true;
+      confirmBtn.disabled = true;
+      setError('authError');
+      try {
+        debugLog('auth-logout-start');
+        await api('/api/auth/logout', { method: 'POST' });
+        closeLogoutDialog();
+        state.authOk = false;
+        state.manualDisconnect = true;
+        clearUsageRecoverTimer();
+        clearReconnectTimer();
+        await disconnectDevice().catch(() => {});
+        state.device = null;
+        state.lastUsage = null;
+        state.lastPayload = null;
+        state.footer = null;
+        setAuthControls(false);
+        setStepStatus(1, '已退出');
+        $('authTitle').textContent = '已退出 Claude';
+        $('authSub').textContent = '需要重新登录后才能同步额度。';
+        $('manualAuth').classList.add('show');
+        setStepStatus(2, '等待中');
+        setStepStatus(3, '等待数据');
+        setActive(0);
+        debugLog('auth-logout-done');
+      } catch (error) {
+        closeLogoutDialog();
+        setError('authError', error.message);
+        debugLog('auth-logout-failed', error.message, compactError(error));
+      } finally {
+        btn.disabled = false;
+        confirmBtn.disabled = false;
+      }
+    }
+
     async function startAuth() {
       const btn = $('loginBtn');
       setLoading(btn, true, '等待授权…');
       setError('authError');
       try {
+        debugLog('auth-login-start');
         const started = await api('/api/auth/login', { method: 'POST' });
+        debugLog('auth-login-command', started.started ? 'started' : 'not-started', started);
         if (!started.started) $('manualAuth').classList.add('show');
         for (let i = 0; i < 90; i++) {
-          if (await checkAuth({ advance: true })) return;
+          if (await checkAuth({ advance: true, warm: true })) return;
           await new Promise((resolve) => setTimeout(resolve, 2000));
         }
         setError('authError', '还没有检测到登录完成。完成授权后点“重新检查”。');
@@ -939,13 +1252,41 @@
       return message || '蓝牙连接失败。确认 Cardputer 在附近并亮屏后再试一次。';
     }
 
+    function isUsageSourceUnavailable(text) {
+      return /usage source unavailable|usage access blocked|statusline usage cache not found|invalid JSON/i.test(String(text || ''));
+    }
+
+    function isSyncAuthIssue(text) {
+      return /login expired|401|Invalid authentication credentials|expired|credentials|Pro\/Max|required.*subscription|subscription.*required|upgrade to (Max|Pro)|Claude (Max|Pro).*required|OAuth.*not allowed|not allowed for this organization|permission_error/i.test(String(text || ''));
+    }
+
+    function isBleLinkError(text) {
+      return /bluetooth|gatt|device.*disconnect|disconnected|not connected|networkerror|notfounderror|no longer|operation failed|write timed out|蓝牙/i.test(String(text || ''));
+    }
+
+    function isBleOutOfRangeError(text) {
+      return /no longer in range|not found|notfounderror|out of range|device unavailable/i.test(String(text || ''));
+    }
+
     function friendlySyncError(errorText) {
       const text = String(errorText || '');
       if (/401|Invalid authentication credentials|expired|credentials/i.test(text)) {
         return 'Claude 登录已过期。点上面的“打开 Claude 登录”，重新授权后会自动恢复。';
       }
+      if (/Pro\/Max|required.*subscription|subscription.*required|upgrade to (Max|Pro)|Claude (Max|Pro).*required/i.test(text)) {
+        return '当前账号没有可用于 Claude Code 的 Pro/Max 会员。升级或换账号后点“重新检查”。';
+      }
+      if (/OAuth.*not allowed|not allowed for this organization|permission_error/i.test(text)) {
+        return '当前组织不允许 OAuth 连接 Claude Code。重新登录、切换账号或检查订阅后点“重新检查”。';
+      }
+      if (isUsageSourceUnavailable(text)) {
+        return '当前没有可用的额度数据源。已保持登录并自动重试；也可以点“刷新”，或打开 Claude Code 产生一次新的 usage 缓存。';
+      }
       if (/403|Just a moment|Cloudflare/i.test(text)) {
         return 'Claude App cookie 被网页防护挡住了，需要重新走 Claude OAuth 登录。';
+      }
+      if (/429|rate[_ -]?limit/i.test(text)) {
+        return 'Claude usage API 限流了。会先显示缓存，并按退避节奏自动重试。';
       }
       if (/abort|timeout/i.test(text)) {
         return '额度请求超时了。会继续尝试，也会优先显示缓存数据。';
@@ -953,37 +1294,114 @@
       return text || '额度同步失败。';
     }
 
-    async function findKnownDevice() {
-      if (!navigator.bluetooth?.getDevices) return null;
-      const devices = await navigator.bluetooth.getDevices();
+    async function getGrantedDevices() {
+      if (!navigator.bluetooth?.getDevices) return [];
+      try {
+        return await navigator.bluetooth.getDevices();
+      } catch {
+        return [];
+      }
+    }
+
+    function chooseKnownDevice(devices) {
       const remembered = localStorage.getItem(STORAGE_DEVICE_ID);
       return devices.find((device) => device.id === remembered)
         || devices.find((device) => device.name === DEVICE_NAME)
+        || (devices.length === 1 ? devices[0] : null)
         || null;
     }
 
+    async function findKnownDevice() {
+      return chooseKnownDevice(await getGrantedDevices()) || state.device || null;
+    }
+
     async function connectDevice(device) {
+      if (state.connectPromise) {
+        debugLog('ble-connect-join', '', compactDevice(device || state.device));
+        return state.connectPromise;
+      }
+
+      const promise = connectDeviceAttempt(device);
+      state.connectPromise = promise;
+      try {
+        return await promise;
+      } finally {
+        if (state.connectPromise === promise) state.connectPromise = null;
+      }
+    }
+
+    async function connectDeviceAttempt(device) {
       clearReconnectTimer();
       setStepStatus(2, '连接中');
       setError('bleError');
       state.manualDisconnect = false;
+      state.needsBleGrant = false;
       state.device = device;
-      device.addEventListener('gattserverdisconnected', onDisconnected);
-      const server = await device.gatt.connect();
-      const service = await server.getPrimaryService(SERVICE_UUID);
-      const characteristic = await service.getCharacteristic(CHAR_UUID);
+      state.server = null;
+      state.characteristic = null;
+      state.writeChain = Promise.resolve();
+      device.removeEventListener('gattserverdisconnected', onDisconnected);
+      debugLog('ble-connect-start', '', compactDevice(device));
+      let server;
+      let characteristic;
+      try {
+        if (device.gatt?.connected) {
+          debugLog('ble-connect-stale-gatt-disconnect', '', compactDevice(device));
+          device.gatt.disconnect();
+          await sleep(120);
+        }
+        device.addEventListener('gattserverdisconnected', onDisconnected);
+        server = await withTimeout(device.gatt.connect(), BLE_CONNECT_TIMEOUT_MS, '蓝牙连接超时');
+        debugLog('ble-connect-gatt-ready', '', compactDevice(device));
+        const service = await withTimeout(
+          server.getPrimaryService(SERVICE_UUID),
+          BLE_DISCOVERY_TIMEOUT_MS,
+          '蓝牙服务发现超时',
+        );
+        debugLog('ble-connect-service-ready', SERVICE_UUID);
+        characteristic = await withTimeout(
+          service.getCharacteristic(CHAR_UUID),
+          BLE_DISCOVERY_TIMEOUT_MS,
+          '蓝牙通道发现超时',
+        );
+        debugLog('ble-connect-characteristic-ready', CHAR_UUID);
+      } catch (error) {
+        state.server = null;
+        state.characteristic = null;
+        state.writeChain = Promise.resolve();
+        device.removeEventListener('gattserverdisconnected', onDisconnected);
+        try {
+          if (device.gatt?.connected) device.gatt.disconnect();
+        } catch {
+          // A failed reconnect can leave the adapter in a transient state; the next pass will retry cleanly.
+        }
+        cleanupStaleGatt(device);
+        debugLog('ble-connect-failed', error.message, compactError(error));
+        throw error;
+      }
       state.server = server;
       state.characteristic = characteristic;
+      clearAdvertisementWatch();
       state.reconnectAttempts = 0;
       state.footer = null;
       localStorage.setItem(STORAGE_DEVICE_ID, device.id);
       setStepStatus(2, `已连接 · ${device.name || DEVICE_NAME}`);
       $('bleName').textContent = `已连接 · ${device.name || DEVICE_NAME}`;
       if (state.active < 2) setActive(2);
+      debugLog('ble-connect-success', '', compactDevice(device));
       startSyncLoop();
-      await syncNow({ force: true }).catch((error) => {
+      syncNow().catch(async (error) => {
         setError('syncError', friendlySyncError(error.message));
-        setStepStatus(3, '同步失败');
+        if (isSyncAuthIssue(error.message)) {
+          setStepStatus(3, '需要处理登录');
+          await checkAuth({ advance: true, probe: true }).catch(() => {});
+          if (state.active > 0) setActive(0);
+        } else if (isUsageSourceUnavailable(error.message)) {
+          setStepStatus(3, '等待数据源');
+          scheduleFastSync();
+        } else {
+          setStepStatus(3, '同步失败');
+        }
       });
     }
 
@@ -991,6 +1409,7 @@
       if (!bluetoothSupported()) {
         throw new Error('这个浏览器不支持 Web Bluetooth。请用 Chrome 或 Edge 打开此页面。');
       }
+      debugLog('ble-picker-open');
       return navigator.bluetooth.requestDevice({
         filters: [{ name: DEVICE_NAME }],
         optionalServices: [SERVICE_UUID],
@@ -1001,11 +1420,18 @@
       const btn = $('bleBtn');
       setLoading(btn, true, '扫描中…');
       state.manualDisconnect = false;
+      state.needsBleGrant = false;
       try {
-        await connectDevice(await requestDevice());
+        const device = await requestDevice();
+        debugLog('ble-picker-selected', '', compactDevice(device));
+        localStorage.setItem(STORAGE_DEVICE_ID, device.id);
+        await connectDevice(device);
       } catch (error) {
         setError('bleError', friendlyBleError(error));
         setStepStatus(2, '未连接');
+        debugLog('ble-picker-failed', error.message, compactError(error));
+        if (state.device) scheduleReconnect();
+        else setBleGrantRequired();
       } finally {
         setLoading(btn, false);
       }
@@ -1016,13 +1442,65 @@
       state.reconnectTimer = null;
     }
 
+    function clearFastSyncTimer() {
+      clearTimeout(state.fastSyncTimer);
+      state.fastSyncTimer = null;
+    }
+
+    function clearUsageRecoverTimer() {
+      clearTimeout(state.usageRecoverTimer);
+      state.usageRecoverTimer = null;
+    }
+
+    function clearLinkWatchTimer() {
+      clearTimeout(state.linkWatchTimer);
+      state.linkWatchTimer = null;
+    }
+
+    function clearLinkProbeTimer() {
+      clearTimeout(state.linkProbeTimer);
+      state.linkProbeTimer = null;
+    }
+
+    function clearAdvertisementWatch() {
+      clearTimeout(state.advertisementReconnectTimer);
+      state.advertisementReconnectTimer = null;
+      if (!state.watchedDevice) return;
+      try {
+        state.watchedDevice.removeEventListener('advertisementreceived', onAdvertisementReceived);
+        state.watchedDevice.unwatchAdvertisements?.();
+      } catch {
+        // Advertisement watching is best-effort and not supported by every browser build.
+      }
+      state.watchedDevice = null;
+    }
+
+    function scheduleFastSync() {
+      if (state.fastSyncTimer || !state.characteristic) return;
+      state.fastSyncTimer = setTimeout(async () => {
+        state.fastSyncTimer = null;
+        if (!state.characteristic) return;
+        try {
+          await syncNow({ force: true });
+        } catch (error) {
+          setError('syncError', friendlySyncError(error.message));
+          if (isSyncAuthIssue(error.message)) {
+            await checkAuth({ advance: true, probe: true }).catch(() => {});
+          } else if (isUsageSourceUnavailable(error.message)) {
+            scheduleFastSync();
+          }
+        }
+      }, USAGE_UNAVAILABLE_RETRY_MS);
+    }
+
     function scheduleReconnect() {
-      if (state.reconnectTimer || state.characteristic || state.manualDisconnect || !state.authOk) return;
+      if (state.reconnectTimer || state.characteristic || state.manualDisconnect || !state.authOk || state.needsBleGrant) return;
       if (!bluetoothSupported()) return;
       const visible = document.visibilityState === 'visible';
       const baseDelay = visible
         ? RECONNECT_DELAYS_MS[Math.min(state.reconnectAttempts, RECONNECT_DELAYS_MS.length - 1)]
-        : HIDDEN_SYNC_INTERVAL_MS;
+        : HIDDEN_RECONNECT_INTERVAL_MS;
+      debugLog('ble-reconnect-scheduled', `${baseDelay}ms`, { attempts: state.reconnectAttempts, visible });
       state.reconnectTimer = setTimeout(async () => {
         state.reconnectTimer = null;
         const ok = await reconnectKnown({ quiet: true });
@@ -1033,7 +1511,55 @@
       }, baseDelay);
     }
 
+    function scheduleLinkWatch() {
+      clearLinkWatchTimer();
+      const delay = document.visibilityState === 'visible' ? LINK_WATCH_VISIBLE_MS : LINK_WATCH_HIDDEN_MS;
+      state.linkWatchTimer = setTimeout(() => {
+        state.linkWatchTimer = null;
+        if (state.authOk && !state.manualDisconnect) {
+          if (state.characteristic && state.device?.gatt && !state.device.gatt.connected) {
+            onDisconnected();
+          } else if (!state.characteristic) {
+            scheduleReconnect();
+          }
+        }
+        scheduleLinkWatch();
+      }, delay);
+    }
+
+    function onAdvertisementReceived() {
+      if (state.characteristic || state.manualDisconnect || !state.authOk || state.advertisementReconnectTimer) return;
+      setStepStatus(2, '发现设备');
+      debugLog('ble-advertisement-received', '', compactDevice(state.watchedDevice || state.device));
+      state.advertisementReconnectTimer = setTimeout(async () => {
+        state.advertisementReconnectTimer = null;
+        if (!state.characteristic && !state.manualDisconnect) {
+          const ok = await reconnectKnown({ quiet: true });
+          if (!ok) scheduleReconnect();
+        }
+      }, 120);
+    }
+
+    async function watchKnownAdvertisements(device, { restart = false } = {}) {
+      if (!device || typeof device.watchAdvertisements !== 'function') return false;
+      if (!restart && state.watchedDevice?.id === device.id) return true;
+      if (restart) debugLog('ble-watch-advertisements', 'restart', compactDevice(device));
+      clearAdvertisementWatch();
+      device.addEventListener('advertisementreceived', onAdvertisementReceived);
+      try {
+        await device.watchAdvertisements();
+        state.watchedDevice = device;
+        debugLog('ble-watch-advertisements', 'started', compactDevice(device));
+        return true;
+      } catch {
+        device.removeEventListener('advertisementreceived', onAdvertisementReceived);
+        debugLog('ble-watch-advertisements', 'unavailable', compactDevice(device));
+        return false;
+      }
+    }
+
     async function reconnectKnown({ quiet = false } = {}) {
+      debugLog('ble-reconnect-start', quiet ? 'quiet' : 'manual');
       if (!quiet) {
         state.manualDisconnect = false;
         setError('bleError');
@@ -1043,69 +1569,234 @@
         setStepStatus(2, '浏览器不支持');
         return false;
       }
-      const known = await findKnownDevice();
+      const grantedDevices = await getGrantedDevices();
+      const known = chooseKnownDevice(grantedDevices) || state.device;
       if (!known) {
-        setStepStatus(2, '等待连接');
+        setBleGrantRequired();
+        if (!quiet) setError('bleError');
+        debugLog('ble-reconnect-no-device', '', { granted: grantedDevices.length });
         return false;
       }
+      state.needsBleGrant = false;
+      $('bleName').textContent = `已授权 · ${known.name || DEVICE_NAME}`;
+      setStepStatus(2, '自动重连中');
+      debugLog('ble-reconnect-known-device', '', compactDevice(known));
+      watchKnownAdvertisements(known, { restart: state.reconnectAttempts > 0 }).catch(() => {});
       try {
         await connectDevice(known);
+        debugLog('ble-reconnect-success', '', compactDevice(known));
         return true;
       } catch (error) {
         if (!quiet) setError('bleError', friendlyBleError(error, { auto: true }));
-        setStepStatus(2, '未连接');
+        setStepStatus(2, '等待设备');
+        if (isBleOutOfRangeError(error.message)) {
+          watchKnownAdvertisements(known, { restart: true }).catch(() => {});
+        }
+        debugLog('ble-reconnect-failed', error.message, compactError(error));
         return false;
       }
     }
 
-    async function writePayloadLine(line) {
-      if (!state.characteristic) throw new Error('蓝牙未连接');
-      const bytes = new TextEncoder().encode(line);
-      for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
-        const chunk = bytes.slice(offset, Math.min(offset + CHUNK_SIZE, bytes.length));
-        if (state.characteristic.writeValueWithoutResponse) {
-          await state.characteristic.writeValueWithoutResponse(chunk);
-        } else {
-          await state.characteristic.writeValue(chunk);
-        }
-        if (offset + CHUNK_SIZE < bytes.length) {
-          await new Promise((resolve) => setTimeout(resolve, 8));
-        }
+    function withTimeout(promise, timeoutMs, message) {
+      let timer = null;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      });
+      return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+    }
+
+    function cleanupStaleGatt(device) {
+      [250, 1500, 5000].forEach((delay) => {
+        setTimeout(() => {
+          if (state.device !== device || state.characteristic || !device.gatt?.connected) return;
+          try {
+            device.gatt.disconnect();
+          } catch {
+            // Best-effort cleanup for late-resolving Web Bluetooth connections.
+          }
+        }, delay);
+      });
+    }
+
+    function markLinkLost(error) {
+      if (!state.device && !state.characteristic && !state.server) return;
+      debugLog('ble-link-lost', error?.message || '', compactError(error));
+      try {
+        if (state.device?.gatt?.connected) state.device.gatt.disconnect();
+      } catch {
+        // The adapter may already have dropped the link.
       }
+      state.server = null;
+      state.characteristic = null;
+      state.writeChain = Promise.resolve();
+      clearLinkProbeTimer();
+      stopSyncLoop();
+      $('bleName').textContent = '未连接 · Claude-Usage';
+      $('deviceChip').textContent = '未连接';
+      setStepStatus(2, '已断开');
+      setStepStatus(3, '等待自动重连');
+      if (error && !isBleLinkError(error.message)) setError('bleError', friendlyBleError(error, { auto: true }));
+      else setError('bleError');
+      setActive(1);
+      state.reconnectAttempts = 0;
+      if (state.device) watchKnownAdvertisements(state.device).catch(() => {});
+      scheduleReconnect();
+    }
+
+    async function writePayloadLine(line, { preferResponse = false, chunkDelayMs = 4 } = {}) {
+      const write = async () => {
+        if (!state.characteristic) throw new Error('蓝牙未连接');
+        if (state.device?.gatt && !state.device.gatt.connected) throw new Error('蓝牙 GATT 已断开');
+        const bytes = new TextEncoder().encode(line);
+        debugLog('ble-write-start', `${bytes.length} bytes`, { preferResponse });
+        for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
+          const chunk = bytes.slice(offset, Math.min(offset + CHUNK_SIZE, bytes.length));
+          if (!state.characteristic) throw new Error('蓝牙已断开');
+          if (state.device?.gatt && !state.device.gatt.connected) throw new Error('蓝牙 GATT 已断开');
+          const op = (!preferResponse && state.characteristic.writeValueWithoutResponse)
+            ? state.characteristic.writeValueWithoutResponse(chunk)
+            : state.characteristic.writeValue(chunk);
+          await withTimeout(op, BLE_WRITE_TIMEOUT_MS, '蓝牙写入超时');
+          if (offset + CHUNK_SIZE < bytes.length) {
+            await new Promise((resolve) => setTimeout(resolve, chunkDelayMs));
+          }
+        }
+        debugLog('ble-write-done', `${bytes.length} bytes`);
+      };
+      const run = state.writeChain.catch(() => {}).then(write);
+      state.writeChain = run.catch(() => {});
+      return run;
+    }
+
+    async function fetchDevicePayload({ force = false } = {}) {
+      return api(`/api/device-payload${force ? '?force=1' : ''}`);
+    }
+
+    async function applyDevicePayload(data, { wroteToDevice = false } = {}) {
+      state.lastUsage = data.usage;
+      state.lastPayload = data.payload;
+      state.lastLine = data.line || state.lastLine;
+      if (!state.footer) state.footer = createFooter(data.payload.fs);
+      renderUsage(data.usage, data.payload);
+      updateFooter();
+      debugLog('usage-payload-applied', wroteToDevice ? 'wrote' : 'preview', {
+        status: data.usage?.status,
+        source: data.usage?.source,
+        stale: Boolean(data.usage?.stale),
+        current: data.payload?.cu,
+        weekly: data.payload?.wu,
+        error: data.payload?.err,
+      });
+
+      if (data.usage?.error) {
+        setError('syncError', friendlySyncError(data.usage.error));
+        if (isSyncAuthIssue(data.usage.error)) {
+          setStepStatus(3, '需要处理登录');
+          await checkAuth({ advance: true, probe: true }).catch(() => {});
+          if (state.active > 0) setActive(0);
+        } else if (isUsageSourceUnavailable(data.usage.error)) {
+          setStepStatus(3, '等待数据源');
+          scheduleUsageRecovery();
+        } else {
+          setStepStatus(3, hasQuotaData(data.usage, data.payload) && data.usage?.stale ? '显示缓存' : '同步失败');
+        }
+        return;
+      }
+
+      clearFastSyncTimer();
+      clearUsageRecoverTimer();
+      setError('syncError');
+      if (state.characteristic) {
+        setStepStatus(3, data.usage?.stale ? '显示缓存' : (wroteToDevice ? '实时同步中' : '待写入设备'));
+      } else {
+        setStepStatus(3, data.usage?.stale ? '缓存已就绪' : '数据已就绪');
+      }
+    }
+
+    function scheduleUsageRecovery() {
+      if (state.usageRecoverTimer || !state.authOk) return;
+      state.usageRecoverTimer = setTimeout(async () => {
+        state.usageRecoverTimer = null;
+        try {
+          await warmUsageSource({ force: true, quiet: true });
+        } catch {
+          scheduleUsageRecovery();
+        }
+      }, USAGE_UNAVAILABLE_RETRY_MS);
+    }
+
+    async function warmUsageSource({ force = false, quiet = false } = {}) {
+      if (!quiet) setError('syncError');
+      debugLog('usage-warm-start', force ? 'force' : 'normal');
+      const data = await fetchDevicePayload({ force });
+      await applyDevicePayload(data, { wroteToDevice: false });
+      return data;
     }
 
     async function syncNow({ force = false } = {}) {
       setError('syncError');
       if (!state.characteristic) throw new Error('蓝牙未连接');
       setStepStatus(3, '同步中');
-      const data = await api(`/api/device-payload${force ? '?force=1' : ''}`);
-      await writePayloadLine(data.line);
-      state.lastUsage = data.usage;
-      state.lastPayload = data.payload;
-      if (!state.footer) state.footer = createFooter(data.payload.fs);
-      renderUsage(data.usage, data.payload);
-      updateFooter();
-      if (data.usage?.error) {
-        setError('syncError', friendlySyncError(data.usage.error));
-        setStepStatus(3, data.usage?.stale ? '显示缓存' : '同步失败');
-      } else {
-        setStepStatus(3, data.usage?.stale ? '显示缓存' : '实时同步中');
+      debugLog('sync-start', force ? 'force' : 'normal');
+      const data = await fetchDevicePayload({ force });
+      try {
+        await writePayloadLine(data.line);
+      } catch (error) {
+        error.linkLost = isBleLinkError(error.message);
+        if (error.linkLost) markLinkLost(error);
+        throw error;
       }
+      await applyDevicePayload(data, { wroteToDevice: true });
       $('deviceChip').textContent = `${state.device?.name || DEVICE_NAME} · 已连接`;
+      scheduleLinkProbe();
+      debugLog('sync-done', data.usage?.source || '', { stale: Boolean(data.usage?.stale) });
       return data;
+    }
+
+    function scheduleLinkProbe() {
+      clearLinkProbeTimer();
+      if (!state.characteristic || state.manualDisconnect) return;
+      const delay = document.visibilityState === 'visible' ? LINK_PROBE_VISIBLE_MS : LINK_PROBE_HIDDEN_MS;
+      state.linkProbeTimer = setTimeout(async () => {
+        state.linkProbeTimer = null;
+        if (!state.characteristic || state.manualDisconnect) {
+          scheduleLinkProbe();
+          return;
+        }
+        try {
+          await writePayloadLine(state.lastLine || WAIT_PAYLOAD_LINE, { preferResponse: true, chunkDelayMs: 2 });
+          scheduleLinkProbe();
+        } catch (error) {
+          markLinkLost(error);
+        }
+      }, delay);
     }
 
     function startSyncLoop() {
       clearTimeout(state.syncTimer);
       clearInterval(state.footerTimer);
+      scheduleLinkProbe();
       const scheduleSync = () => {
         const delay = document.visibilityState === 'visible' ? SYNC_INTERVAL_MS : HIDDEN_SYNC_INTERVAL_MS;
         state.syncTimer = setTimeout(async () => {
           try {
             await syncNow();
           } catch (error) {
+            if (error.linkLost || isBleLinkError(error.message)) {
+              markLinkLost(error);
+              return;
+            }
             setError('syncError', friendlySyncError(error.message));
-            setStepStatus(3, '同步失败');
+            if (isSyncAuthIssue(error.message)) {
+              setStepStatus(3, '需要处理登录');
+              await checkAuth({ advance: true, probe: true }).catch(() => {});
+              if (state.active > 0) setActive(0);
+            } else if (isUsageSourceUnavailable(error.message)) {
+              setStepStatus(3, '等待数据源');
+              scheduleFastSync();
+            } else {
+              setStepStatus(3, '同步失败');
+            }
           } finally {
             if (state.characteristic) scheduleSync();
           }
@@ -1117,14 +1808,18 @@
 
     function stopSyncLoop() {
       clearTimeout(state.syncTimer);
+      clearFastSyncTimer();
+      clearLinkProbeTimer();
       clearInterval(state.footerTimer);
       state.syncTimer = null;
       state.footerTimer = null;
     }
 
     function onDisconnected() {
+      debugLog('ble-disconnected-event', '', compactDevice(state.device));
       state.server = null;
       state.characteristic = null;
+      state.writeChain = Promise.resolve();
       stopSyncLoop();
       $('bleName').textContent = '未连接 · Claude-Usage';
       $('deviceChip').textContent = '未连接';
@@ -1134,17 +1829,30 @@
         return;
       }
       setStepStatus(2, '已断开');
-      setStepStatus(3, '等待重连');
+      setStepStatus(3, '等待自动重连');
       setError('bleError');
       setActive(1);
       state.reconnectAttempts = 0;
+      if (state.device) watchKnownAdvertisements(state.device).catch(() => {});
       scheduleReconnect();
     }
 
     async function disconnectDevice() {
+      debugLog('ble-manual-disconnect-start');
       state.manualDisconnect = true;
       clearReconnectTimer();
+      clearAdvertisementWatch();
+      clearUsageRecoverTimer();
       stopSyncLoop();
+      const characteristic = state.characteristic;
+      if (characteristic && state.device?.gatt?.connected) {
+        try {
+          await writePayloadLine(WAIT_PAYLOAD_LINE, { preferResponse: true, chunkDelayMs: 2 });
+          await new Promise((resolve) => setTimeout(resolve, 60));
+        } catch {
+          // The device may already be gone; disconnect should still finish locally.
+        }
+      }
       if (state.device?.gatt?.connected) state.device.gatt.disconnect();
       state.server = null;
       state.characteristic = null;
@@ -1153,9 +1861,11 @@
       setStepStatus(2, '已断开');
       setStepStatus(3, '等待数据');
       setActive(1);
+      debugLog('ble-manual-disconnect-done');
     }
 
     function resetAll() {
+      debugLog('flow-reset');
       stopSyncLoop();
       if (state.device?.gatt?.connected) state.device.gatt.disconnect();
       state.device = null;
@@ -1165,7 +1875,10 @@
       state.lastPayload = null;
       state.footer = null;
       state.manualDisconnect = true;
+      state.needsBleGrant = false;
       clearReconnectTimer();
+      clearAdvertisementWatch();
+      clearUsageRecoverTimer();
       setError('authError');
       setError('bleError');
       setError('syncError');
@@ -1181,30 +1894,56 @@
       if (savedTheme) setTheme(savedTheme);
       else setTheme(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 
+      debugLog('boot', location.href, {
+        webBluetooth: bluetoothSupported(),
+        visibility: document.visibilityState,
+      });
       setActive(0);
       $('loginBtn').addEventListener('click', startAuth);
-      $('recheckAuthBtn').addEventListener('click', () => checkAuth({ advance: true }).catch((e) => setError('authError', e.message)));
+      $('logoutBtn').addEventListener('click', requestLogoutAuth);
+      $('cancelLogoutBtn').addEventListener('click', closeLogoutDialog);
+      $('confirmLogoutBtn').addEventListener('click', performLogoutAuth);
+      $('logoutDialog').addEventListener('click', (event) => {
+        if (event.target === $('logoutDialog')) closeLogoutDialog();
+      });
+      $('recheckAuthBtn').addEventListener('click', () => checkAuth({ advance: true, probe: true, warm: true }).catch((e) => setError('authError', e.message)));
       $('bleBtn').addEventListener('click', connectWithPicker);
-      $('retryKnownBtn').addEventListener('click', reconnectKnown);
-      $('refreshBtn').addEventListener('click', () => syncNow({ force: true }).catch((e) => setError('syncError', e.message)));
+      $('refreshBtn').addEventListener('click', () => {
+        const action = state.characteristic ? syncNow({ force: true }) : warmUsageSource({ force: true });
+        action.catch((e) => setError('syncError', friendlySyncError(e.message)));
+      });
       $('disconnectBtn').addEventListener('click', disconnectDevice);
       $('resetAll').addEventListener('click', (event) => { event.preventDefault(); resetAll(); });
       $('themeToggle').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+      $('refreshDebugBtn').addEventListener('click', loadBridgeDebugLogs);
+      $('clearDebugBtn').addEventListener('click', () => {
+        state.debugLogs = [];
+        renderDebugLog();
+      });
       document.addEventListener('visibilitychange', () => {
+        debugLog('visibility-change', document.visibilityState);
+        scheduleLinkWatch();
         if (state.characteristic) startSyncLoop();
         else scheduleReconnect();
       });
+      window.addEventListener('beforeunload', () => {
+        if (!state.pendingDebugEvents.length || !navigator.sendBeacon) return;
+        const events = state.pendingDebugEvents.splice(0, state.pendingDebugEvents.length);
+        const body = new Blob([JSON.stringify({ events })], { type: 'application/json' });
+        navigator.sendBeacon('/api/debug/events', body);
+      });
+      scheduleLinkWatch();
 
       if (!bluetoothSupported()) {
         setError('bleError', 'Web Bluetooth 需要 Chrome 或 Edge。Safari 暂不可用。');
       }
 
       try {
-        const ok = await checkAuth({ advance: true });
+        const ok = await checkAuth({ advance: true, warm: true, reconnect: false });
         if (ok) {
-          setStepStatus(2, '尝试自动重连');
+          setStepStatus(2, '自动重连中');
           const connected = await reconnectKnown();
-          if (!connected) scheduleReconnect();
+          if (!connected && !state.needsBleGrant) scheduleReconnect();
         }
       } catch (error) {
         setError('authError', error.message);
