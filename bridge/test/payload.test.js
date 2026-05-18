@@ -33,6 +33,43 @@ test('compact payload trims long error text for the small screen', () => {
     error: 'x'.repeat(200),
   });
 
-  assert.equal(payload.err.length, 54);
+  assert.equal(payload.err.length, 42);
   assert.equal(payload.err.endsWith('.'), true);
+});
+
+test('compact payload hides verbose Anthropic 429 bodies from the small screen', () => {
+  const payload = makeCompactPayload({
+    status: 'stale',
+    stale: true,
+    error: 'Anthropic usage API returned HTTP 429: { "error": { "type": "rate_limit_error", "message": "Rate limited. Please try again later." } }',
+  });
+
+  assert.equal(payload.err, 'Rate limited');
+});
+
+test('compact payload uses a short subscription-required message', () => {
+  const payload = makeCompactPayload({
+    status: 'subscription_required',
+    error: 'Claude Max or Pro is required to connect to Claude Code',
+  });
+
+  assert.equal(payload.err, 'Pro/Max required');
+});
+
+test('compact payload uses a short OAuth-not-allowed message', () => {
+  const payload = makeCompactPayload({
+    status: 'auth_required',
+    error: 'OAuth authentication is currently not allowed for this organization.',
+  });
+
+  assert.equal(payload.err, 'OAuth not allowed');
+});
+
+test('compact payload uses a short message when all usage sources fail', () => {
+  const payload = makeCompactPayload({
+    status: 'error',
+    error: 'Claude usage source unavailable',
+  });
+
+  assert.equal(payload.err, 'Usage unavailable');
 });

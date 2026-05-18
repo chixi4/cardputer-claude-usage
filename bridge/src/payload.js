@@ -10,6 +10,23 @@ function compactText(value, max = 64) {
   return text.length > max ? `${text.slice(0, max - 1)}.` : text;
 }
 
+function compactError(value) {
+  const text = compactText(value, 160);
+  if (/Pro\/Max|Claude (Max|Pro).*required|subscription.*required|upgrade to (Max|Pro)/i.test(text)) {
+    return 'Pro/Max required';
+  }
+  if (/OAuth.*not allowed|not allowed for this organization|permission_error/i.test(text)) {
+    return 'OAuth not allowed';
+  }
+  if (/usage source unavailable|usage access blocked|statusline usage cache not found|invalid JSON/i.test(text)) {
+    return 'Usage unavailable';
+  }
+  if (/rate[_ -]?limit|HTTP 429/i.test(text)) return 'Rate limited';
+  if (/login|credential|expired|401/i.test(text)) return 'Login expired';
+  if (/timeout|abort/i.test(text)) return 'Request timeout';
+  return compactText(text, 42);
+}
+
 export function makeCompactPayload(data) {
   const current = data?.current || {};
   const weekly = data?.weekly || {};
@@ -36,7 +53,7 @@ export function makeCompactPayload(data) {
     age: finiteNumber(data?.age_seconds),
     stale: Boolean(data?.stale),
     src: compactText(data?.source || '', 20),
-    err: compactText(data?.error || '', 54),
+    err: compactError(data?.error || ''),
     ts: updatedAt,
     fs: seed || 1,
   };
@@ -66,7 +83,7 @@ export function makeDeviceStatusPayload(status, message, nowMs = Date.now()) {
     },
     updated_at: Math.floor(nowMs / 1000),
     age_seconds: 0,
-    stale: status !== 'live',
+    stale: false,
     demo: false,
     error: message || null,
   };

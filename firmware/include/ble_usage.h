@@ -21,6 +21,15 @@ static String bleRxBuf = "";
 static BLEServer* _bleServer = nullptr;
 static BLEService* _bleService = nullptr;
 static BLECharacteristic* _bleChar = nullptr;
+static uint32_t bleEventSeq = 0;
+static uint32_t bleFrameSeq = 0;
+static uint32_t bleWriteChunks = 0;
+
+static void bleLog(const char* event, const String& detail = "") {
+  Serial.printf("[ble %lu +%lu] %s", ++bleEventSeq, millis(), event);
+  if (detail.length() > 0) Serial.printf(" %s", detail.c_str());
+  Serial.println();
+}
 
 static void bleStartAdvertising() {
   if (!_bleServer) return;
@@ -28,25 +37,28 @@ static void bleStartAdvertising() {
   if (!bleAdvConfigured) {
     adv->addServiceUUID(BLE_SERVICE_UUID);
     adv->setScanResponse(true);
-    adv->setMinInterval(0x140);
-    adv->setMaxInterval(0x280);
+    adv->setMinInterval(0x60);
+    adv->setMaxInterval(0x100);
     adv->setMinPreferred(0x06);
     adv->setMaxPreferred(0x12);
     bleAdvConfigured = true;
   }
   BLEDevice::startAdvertising();
   bleAdvertising = true;
+  bleLog("advertising", String("name=") + BLE_DEVICE_NAME);
 }
 
 class BLEUsageServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer*) override {
     bleConnected = true;
     bleAdvertising = false;
+    bleLog("connected");
   }
 
   void onDisconnect(BLEServer*) override {
     bleConnected = false;
     bleRxBuf = "";
+    bleLog("disconnected");
     bleStartAdvertising();
   }
 };
@@ -55,6 +67,7 @@ class BLEUsageCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* pChar) override {
     std::string val = pChar->getValue();
     if (val.length() == 0) return;
+    bleWriteChunks++;
 
     for (char c : val) {
       if (c == '\r') continue;
@@ -62,6 +75,10 @@ class BLEUsageCallbacks : public BLECharacteristicCallbacks {
         if (bleRxBuf.length() > 0) {
           bleDataStr = bleRxBuf;
           bleDataReady = true;
+          bleLog("rx-frame", String("id=") + String(++bleFrameSeq)
+            + " len=" + String(bleDataStr.length())
+            + " chunks=" + String(bleWriteChunks));
+          bleWriteChunks = 0;
           bleRxBuf = "";
         }
         continue;
@@ -70,6 +87,8 @@ class BLEUsageCallbacks : public BLECharacteristicCallbacks {
       if (bleRxBuf.length() >= 768) {
         bleOverflow = true;
         bleRxBuf = "";
+        bleWriteChunks = 0;
+        bleLog("rx-overflow");
         continue;
       }
       bleRxBuf += c;
@@ -79,7 +98,7 @@ class BLEUsageCallbacks : public BLECharacteristicCallbacks {
 
 void bleUsageInit() {
   BLEDevice::init(BLE_DEVICE_NAME);
-  BLEDevice::setPower(ESP_PWR_LVL_N6);
+  BLEDevice::setPower(ESP_PWR_LVL_N0);
   _bleServer = BLEDevice::createServer();
   _bleServer->setCallbacks(new BLEUsageServerCallbacks());
   _bleService = _bleServer->createService(BLE_SERVICE_UUID);
@@ -91,7 +110,22 @@ void bleUsageInit() {
   _bleService->start();
   bleStartAdvertising();
 
-  Serial.println("[ble] advertising name=Claude-Usage");
+  bleLog("ready", "service=cafe1234 char=cafe5678");
+}
+
+void bleUsageReset() {
+  bleLog("reset-restart", "reason=ble-stack-reinit-is-unsafe");
+  Serial.flush();
+  delay(80);
+  ESP.restart();
+}
+
+String bleUsageDebugStatus() {
+  return String("connected=") + (bleConnected ? "1" : "0")
+    + " advertising=" + (bleAdvertising ? "1" : "0")
+    + " data_ready=" + (bleDataReady ? "1" : "0")
+    + " rx_len=" + String(bleRxBuf.length())
+    + " frames=" + String(bleFrameSeq);
 }
 
 bool bleUsageAvailable() {
